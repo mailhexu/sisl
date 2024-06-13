@@ -9,6 +9,13 @@ we hit release version 1.0.0.
 ## [0.15.0] - YYYY-MM-DD
 
 ### Added
+- added `vectorsSileSiesta` to read vibra eigenmode output
+- added `dihedral` to `Geometry`, #773
+- ability to retain sub-classes through `<class>.new` calls
+- added `Listify` to ensure arguments behaves as *iterables*
+- setter for `Lattice.pbc` to specify it through an array
+- `Lattice.volumef` to calculate a subset volume based on axes
+- added `write_grid` to Siesta binary grid files
 - added the `goldene` 2D lattice, a `hexagonal` Gold 2D structure
 - added the `hexagonal` 2D lattice, close-packed FCC(111) surface
 - improved `atom` projections of states, #750
@@ -46,6 +53,12 @@ we hit release version 1.0.0.
 - A new `AtomicMatrixPlot` to plot sparse matrices, #668
 
 ### Fixed
+- reading XV/STRUCT files from fdf siles could cause problems, #778
+- `Geometry.[ao][us]c2[su]c` methods now retains the input shapes (unless `unique=True`)
+- lots of `Lattice` methods did not consistently copy over BC
+- `BrillouinZone.volume` fixed to actually return BZ volume
+  use `Lattice.volume` for getting the lattice volume.
+- xsf files now only respect `lattice.pbc` for determining PBC, #764
 - fixed `CHGCAR` spin-polarized density reads, #754
 - dispatch methods now searches the mro for best matches, #721
 - all `eps` arguments has changed to `atol`
@@ -78,12 +91,17 @@ we hit release version 1.0.0.
   be done for assigning matrix elements (it fills with 0's).
 
 ### Removed
+- `xvSileSiesta.read_geometry(species_as_Z)`, deprecated in favor of `atoms=`
+- `structSileSiesta.read_geometry(species_as_Z)`, deprecated in favor of `atoms=`
+- `Atom.radii` is removed, `Atom.radius` is the correct invocation
 - `sisl.plot` is removed (`sisl.viz` is replacing it!)
 - `cell` argument for `Geometry.translate/move` (it never worked)
 - removed `Selector` and `TimeSelector`, they were never used internally
 
 ### Changed
-- changed `Eigenmode.displacement` return shape, please read the documentation
+- `hsxSileSiesta.read_hamiltonian` now implicitly shifts Fermi-level to 0 (for newer HSX versions)
+- deprecated `periodic` to `axes` argument in `BrillouinZone.volume`
+- changed `Eigenmode.displacement` shape, please read the documentation
 - bumped minimal Python version to 3.9, #640
 - documentation build system on RTD is updated, #745
 - `gauge` arguments now accept 'cell' and 'orbital' in replacements for 'R' and 'r', respectively

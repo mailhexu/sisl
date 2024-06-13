@@ -207,6 +207,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
     DOS : total DOS (same as summing over orbitals)
     COP : calculate COOP or COHP curves
     spin_moment : spin moment
+    Geometry.apply : allows one to convert orbital data, to atomic data
 
     Returns
     -------
@@ -292,7 +293,14 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
 
 
 @set_module("sisl.physics.electron")
-def COP(E, eig, state, M, distribution="gaussian", tol=1e-10):
+@deprecate_argument(
+    "tol",
+    "atol",
+    "argument tol has been deprecated in favor of atol, please update your code.",
+    "0.15",
+    "0.16",
+)
+def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
     r"""Calculate the Crystal Orbital Population for a set of energies, `E`, with a distribution function
 
     The :math:`\mathrm{COP}(E)` is calculated as:
@@ -321,8 +329,9 @@ def COP(E, eig, state, M, distribution="gaussian", tol=1e-10):
     distribution : func or str, optional
        a function that accepts :math:`E-\epsilon` as argument and calculates the
        distribution function.
-    tol : float, optional
-       tolerance for considering an eigenstate to contribute to an energy point,
+    atol : float, optional
+       tolerance value where the distribution should be above before
+       considering an eigenstate to contribute to an energy point,
        a higher value means that more energy points are discarded and so the calculation
        is faster.
 
@@ -375,7 +384,7 @@ def COP(E, eig, state, M, distribution="gaussian", tol=1e-10):
         for e, s in zip(eig, state):
             # calculate contribution from this state
             we = distribution(E - e)
-            bools = we >= tol
+            bools = we >= atol
             if np.any(bools):
                 tmp = (s.conj() * s).real
                 cop += new_list(bools, tmp, we)
@@ -407,7 +416,7 @@ def COP(E, eig, state, M, distribution="gaussian", tol=1e-10):
         for e, s in zip(eig, state):
             # calculate contribution from this state
             we = distribution(E - e)
-            bools = we >= tol
+            bools = we >= atol
             if np.any(bools):
                 s = np.outer(s.conj(), s)
                 tmp = hstack([m.multiply(s).real for m in Ms])
@@ -428,7 +437,7 @@ def COP(E, eig, state, M, distribution="gaussian", tol=1e-10):
 
 
 @set_module("sisl.physics.electron")
-def spin_moment(state, S=None, project=False):
+def spin_moment(state, S=None, project: bool = False):
     r""" Spin magnetic moment (spin texture) and optionally orbitally resolved moments
 
     This calculation only makes sense for non-colinear calculations.
@@ -896,12 +905,12 @@ def conductivity(
 def berry_phase(
     contour,
     sub=None,
-    eigvals=False,
-    closed=True,
+    eigvals: bool = False,
+    closed: bool = True,
     method="berry",
     *,
     eigenstate_kwargs=None,
-    ret_overlap=False,
+    ret_overlap: bool = False,
 ):
     r""" Calculate the Berry-phase on a loop path
 
@@ -930,9 +939,9 @@ def berry_phase(
        first and last k-point must not be the same.
     sub : None or list of int, optional
        selected bands to calculate the Berry phase of
-    eigvals : bool, optional
+    eigvals :
        return the eigenvalues of the product of the overlap matrices
-    closed : bool, optional
+    closed :
        whether or not to include the connection of the last and first points in the loop
        Forced true for Zak-phase calculations.
     method : {"berry", "zak"}
@@ -944,7 +953,7 @@ def berry_phase(
     eigenstate_kwargs : dict, optional
        keyword arguments passed directly to the ``contour.eigenstate`` method.
        One should *not* pass ``k`` as that is already used.
-    ret_overlap: bool, optional
+    ret_overlap:
        optionally return the overlap matrix :math:`\mathbf S`
 
     Notes
@@ -1051,13 +1060,13 @@ def berry_phase(
             # Loop remaining eigenstates
             for second in eigenstates:
                 _lowdin(second)
-                prd = _process(prd, prev.inner(second, diag=False))
+                prd = _process(prd, prev.inner(second, projection="matrix"))
                 prev = second
 
             # Complete the loop
             if closed:
                 # Include last-to-first segment
-                prd = _process(prd, prev.inner(first, diag=False))
+                prd = _process(prd, prev.inner(first, projection="matrix"))
             return prd
 
     else:
@@ -1072,10 +1081,10 @@ def berry_phase(
             for second in eigenstates:
                 second.sub(sub, inplace=True)
                 _lowdin(second)
-                prd = _process(prd, prev.inner(second, diag=False))
+                prd = _process(prd, prev.inner(second, projection="matrix"))
                 prev = second
             if closed:
-                prd = _process(prd, prev.inner(first, diag=False))
+                prd = _process(prd, prev.inner(first, projection="matrix"))
             return prd
 
     S = _berry(contour.apply.iter.eigenstate(**eigenstate_kwargs))

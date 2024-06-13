@@ -47,7 +47,6 @@ from ..sile import (
     sile_fh_open,
     sile_raise_write,
 )
-from ._help import _replace_with_species
 from .bands import bandsSileSiesta
 from .basis import ionncSileSiesta, ionxmlSileSiesta
 from .binaries import (
@@ -161,7 +160,7 @@ class fdfSileSiesta(SileSiesta):
             self.fh = gzip.open(self.dir_file(f"{f}.gz"), mode="rt")
         else:
             warn(
-                f"{self!s} is trying to include file: {f} but the file seems not to exist? Will disregard file!"
+                f"{self!r} is trying to include file: {f} but the file seems not to exist? Will disregard file!"
             )
 
     def _popfile(self):
@@ -666,7 +665,7 @@ class fdfSileSiesta(SileSiesta):
                 idx = list2str(geometry.names[n] + 1).replace("-", " -- ")
                 if len(idx) > 200:
                     info(
-                        f"{self!s}.write_geometry will not write the constraints for {n} (too long line)."
+                        f"{self!r}.write_geometry will not write the constraints for {n} (too long line)."
                     )
                 else:
                     _write_block = write_block(idx, append, _write_block)
@@ -832,7 +831,7 @@ class fdfSileSiesta(SileSiesta):
 
     def _r_lattice_struct(self, *args, **kwargs):
         """Returns `Lattice` object from the STRUCT files"""
-        for end in ["STRUCT_NEXT_ITER", "STRUCT_OUT", "STRUCT_IN"]:
+        for end in ("STRUCT_NEXT_ITER", "STRUCT_OUT", "STRUCT_IN"):
             f = self.dir_file(self.get("SystemLabel", default="siesta") + f".{end}")
             _track_file(self._r_lattice_struct, f)
             if f.is_file():
@@ -1228,7 +1227,7 @@ class fdfSileSiesta(SileSiesta):
                 daxis = geom_tile.xyz[:, ax] - geom.xyz[:, ax]
                 if not np.allclose(daxis, daxis[0], rtol=0.0, atol=0.01):
                     raise SislError(
-                        f"{self!s}.read_dynamical_matrix(FC) could "
+                        f"{self!r}.read_dynamical_matrix(FC) could "
                         "not figure out the tiling method for the supercell"
                     )
 
@@ -1446,10 +1445,11 @@ class fdfSileSiesta(SileSiesta):
         return None
 
     def _r_geometry_species(self):
-        atoms_species = self.get("AtomicCoordinatesAndAtomicSpecies")
-        if atoms_species:
-            atoms_species = map(lambda x: int(x.split()[3]) - 1, atoms_species)
-        return atoms_species
+        species = self.get("AtomicCoordinatesAndAtomicSpecies", default=[])
+        if species:
+            na = self.get("NumberOfAtoms", default=len(species))
+            species = _a.fromiteri(map(lambda x: x.split()[3], species[:na])) - 1
+        return species
 
     def _r_geometry_xv(self, *args, **kwargs):
         """Returns `Geometry` object from the XV file"""
@@ -1458,11 +1458,7 @@ class fdfSileSiesta(SileSiesta):
         _track_file(self._r_geometry_xv, f)
         if f.is_file():
             basis = self.read_basis()
-            if basis is None:
-                geom = xvSileSiesta(f).read_geometry(species_as_Z=False)
-            else:
-                geom = xvSileSiesta(f).read_geometry(species_as_Z=True)
-                _replace_with_species(geom.atoms, basis)
+            geom = xvSileSiesta(f).read_geometry(atoms=basis)
             nsc = self.read_lattice_nsc()
             geom.set_nsc(nsc)
         return geom
@@ -1475,11 +1471,7 @@ class fdfSileSiesta(SileSiesta):
             _track_file(self._r_geometry_struct, f)
             if f.is_file():
                 basis = self.read_basis()
-                if basis is None:
-                    geom = structSileSiesta(f).read_geometry(species_as_Z=False)
-                else:
-                    geom = structSileSiesta(f).read_geometry(species_as_Z=True)
-                    _replace_with_species(geom.atoms, basis)
+                geom = structSileSiesta(f).read_geometry(atoms=basis)
                 nsc = self.read_lattice_nsc()
                 geom.set_nsc(nsc)
                 break
@@ -1499,7 +1491,7 @@ class fdfSileSiesta(SileSiesta):
         _track_file(self._r_geometry_tshs, f, inputs=[("TS.HS.Save", "True")])
         if f.is_file():
             # Default to a geometry with the correct atomic numbers etc.
-            return tshsSileSiesta(f).read_geometry(basis=self.read_basis())
+            return tshsSileSiesta(f).read_geometry(atoms=self.read_basis())
         return None
 
     def _r_geometry_hsx(self):
@@ -1508,7 +1500,9 @@ class fdfSileSiesta(SileSiesta):
         _track_file(self._r_geometry_hsx, f, inputs=[("Save.HS", "True")])
         if f.is_file():
             # Default to a geometry with the correct atomic numbers etc.
-            return hsxSileSiesta(f).read_geometry(geometry=self.read_geometry(False))
+            return hsxSileSiesta(f).read_geometry(
+                geometry=self.read_geometry(order="^hsx")
+            )
         return None
 
     def _r_geometry_fdf(self, *args, **kwargs):
@@ -1587,18 +1581,13 @@ class fdfSileSiesta(SileSiesta):
         atoms = self.read_basis()
         if atoms is None:
             warn(
-                "Block ChemicalSpeciesLabel does not exist, cannot determine the basis (all Hydrogen)."
+                "Block ChemicalSpeciesLabel does not exist, cannot determine the basis (all will be their species indices)."
             )
+            # the following call will then make use of this object
+            atoms = species
 
-            # Default atom (hydrogen)
-            atoms = Atom(1)
-
-        # the above reading of basis sets will always
-        # ensure a correct basis set with correct number of atoms.
-        # After all the number of atoms in the basis set is decided
-        # by the AtomicCoordinatesAndAtomicSpecies block (which is found just
-        # above).
-        atoms = Atoms(atoms[:na], na=len(xyz))
+        # Default atoms are the species indices... Basically unknown
+        atoms = _fill_basis_empty(species, atoms)
 
         if isinstance(origin, str):
             opt = origin
@@ -1785,10 +1774,10 @@ class fdfSileSiesta(SileSiesta):
         ----------
         order: list of str, optional
             the order of which to try and read the basis information.
-            By default this is ``["nc", "ion", "ORB_INDX", "fdf"]``
+            By default this is ``["nc", "ion", "ORB_INDX", "HSX", "fdf"]``
         """
         order = _parse_order(
-            kwargs.pop("order", None), ["nc", "ion", "ORB_INDX", "fdf"]
+            kwargs.pop("order", None), ["nc", "ion", "ORB_INDX", "HSX", "fdf"]
         )
         for f in order:
             v = getattr(self, f"_r_basis_{f.lower()}")(*args, **kwargs)
@@ -1833,8 +1822,10 @@ class fdfSileSiesta(SileSiesta):
 
             # now try and read the basis
             for ext in exts:
-                if f.with_suffix(f".{ext}").is_file():
-                    atoms[idx] = ion_files[ext](f.with_suffix(f".{ext}")).read_basis()
+                ion = f.with_suffix(f".{ext}")
+                _track_file(self._r_basis_ion, ion)
+                if ion.is_file():
+                    atoms[idx] = ion_files[ext](ion).read_basis()
                     found_one = True
                     break
             else:
@@ -1850,11 +1841,11 @@ class fdfSileSiesta(SileSiesta):
         elif not found_one:
             return None
 
-        atoms_species = self._r_geometry_species()
-        if atoms_species:
-            return Atoms([atoms[spc] for spc in atoms_species])
+        species = self._r_geometry_species()
+        if len(species) > 0:
+            return _fill_basis_empty(species, Atoms(atoms))
         warn(
-            f"{self!s} does not contain the AtomicCoordinatesAndAtomicSpecies block, basis set definition may not contain all atoms."
+            f"{self!r} does not contain the AtomicCoordinatesAndAtomicSpecies block, basis set definition may not contain all atoms."
         )
         return Atoms(atoms)
 
@@ -1865,7 +1856,17 @@ class fdfSileSiesta(SileSiesta):
             warn(
                 f"Siesta basis information is read from '{f}'; radial functions are not accessible."
             )
-            return orbindxSileSiesta(f).read_basis(basis=self._r_basis_fdf())
+            return orbindxSileSiesta(f).read_basis(atoms=self._r_basis_fdf())
+        return None
+
+    def _r_basis_hsx(self, *args, **kwargs):
+        f = self.dir_file(self.get("SystemLabel", default="siesta") + ".HSX")
+        _track_file(self._r_basis_hsx, f, inputs=[("Save.HS", "True")])
+        if f.is_file():
+            if "atoms" not in kwargs:
+                # to ensure we get the correct orbital count
+                kwargs["atoms"] = self.read_basis(order="^hsx")
+            return hsxSileSiesta(f).read_basis(*args, **kwargs)
         return None
 
     def _r_basis_fdf(self):
@@ -1915,12 +1916,12 @@ class fdfSileSiesta(SileSiesta):
             atoms[idx] = Atom(**atom)
 
         # retrieve the atomic species (from the AtomicCoordinatesAndSpecies block)
-        atoms_species = self._r_geometry_species()
-        if atoms_species:
-            return Atoms([atoms[spc] for spc in atoms_species])
+        species = self._r_geometry_species()
+        if len(species) > 0:
+            return _fill_basis_empty(species, Atoms(atoms))
 
         warn(
-            f"{self!s} does not contain the AtomicCoordinatesAndAtomicSpecies block, basis set definition may not contain all atoms."
+            f"{self!r} does not contain the AtomicCoordinatesAndAtomicSpecies block, basis set definition may not contain all atoms."
         )
         return Atoms(atoms)
 
@@ -2073,7 +2074,7 @@ class fdfSileSiesta(SileSiesta):
                 raise ValueError
         except Exception:
             warn(
-                f"{self!s} could not succesfully read the overlap matrix in {parent_call}."
+                f"{self!r} could not succesfully read the overlap matrix in {parent_call}."
             )
 
     def read_density_matrix(self, *args, **kwargs) -> DensityMatrix:
@@ -2283,18 +2284,19 @@ class fdfSileSiesta(SileSiesta):
         _track_file(self._r_hamiltonian_hsx, f, inputs=[("Save.HS", "True")])
         H = None
         if f.is_file():
-            if hsxSileSiesta(f).version == 0:
-                if "geometry" not in kwargs:
-                    # to ensure we get the correct orbital count
-                    kwargs["geometry"] = self.read_geometry(True)
-            H = hsxSileSiesta(f).read_hamiltonian(*args, **kwargs)
-            Ef = self.read_fermi_level()
-            if Ef is None:
-                info(
-                    f"{self!s}.read_hamiltonian from HSX file failed shifting to the Fermi-level."
-                )
-            else:
-                H.shift(-Ef)
+            hsx = hsxSileSiesta(f)
+            _track_file(self._r_hamiltonian_hsx, f, f"  got version = {hsx.version}")
+            if "atoms" not in kwargs:
+                kwargs["atoms"] = self.read_basis(order="^hsx")
+            H = hsx.read_hamiltonian(*args, **kwargs)
+            if hsx.version == 0:
+                Ef = self.read_fermi_level()
+                if Ef is None:
+                    info(
+                        f"{self!r}.read_hamiltonian from HSX file failed shifting to the Fermi-level."
+                    )
+                else:
+                    H.shift(-Ef)
         return H
 
     @default_ArgumentParser(description="Manipulate a FDF file.")

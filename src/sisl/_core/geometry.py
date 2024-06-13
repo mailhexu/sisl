@@ -47,15 +47,23 @@ from sisl._indices import (
 from sisl._internal import set_module
 from sisl._math_small import cross3, is_ascending
 from sisl._namedindex import NamedIndex
-from sisl.messages import SislError, deprecate_argument, info, warn
+from sisl.messages import SislError, deprecate_argument, deprecation, info, warn
 from sisl.shape import Cube, Shape, Sphere
-from sisl.typing import ArrayLike, AtomsIndex, NDArray, OrbitalsIndex, SileLike
+from sisl.typing import (
+    ArrayLike,
+    AtomsIndex,
+    CellAxes,
+    NDArray,
+    OrbitalsIndex,
+    SileLike,
+)
 from sisl.utils import (
     angle,
     cmd,
     default_ArgumentParser,
     default_namespace,
     direction,
+    listify,
     lstranges,
     str_spec,
     strmap,
@@ -519,14 +527,14 @@ class Geometry(
 
         Returns
         -------
-        `Geometry`
+        Geometry
              the primary unit cell
-        `Lattice`
+        Lattice
              the tiled supercell numbers used to find the primary unit cell (only if `ret_super` is true)
 
         Raises
         ------
-        `SislError`
+        SislError
              If the algorithm fails.
         """
         na = len(self)
@@ -996,7 +1004,8 @@ class Geometry(
             # Get unit-cell atoms, we are drawing a circle, and this
             # circle only encompasses those already in the unit-cell.
             all_idx[1] = np.union1d(
-                self.sc2uc(all_idx[0], unique=True), self.sc2uc(all_idx[1], unique=True)
+                self.asc2uc(all_idx[0], unique=True),
+                self.asc2uc(all_idx[1], unique=True),
             )
             # If we translated stuff into the unit-cell, we could end up in situations
             # where the supercell atom is in the circle, but not the UC-equivalent
@@ -1126,7 +1135,8 @@ class Geometry(
             # Get unit-cell atoms, we are drawing a circle, and this
             # circle only encompasses those already in the unit-cell.
             all_idx[1] = np.union1d(
-                self.sc2uc(all_idx[0], unique=True), self.sc2uc(all_idx[1], unique=True)
+                self.asc2uc(all_idx[0], unique=True),
+                self.asc2uc(all_idx[1], unique=True),
             )
             # If we translated stuff into the unit-cell, we could end up in situations
             # where the supercell atom is in the circle, but not the UC-equivalent
@@ -1677,6 +1687,85 @@ class Geometry(
             return ang
         return np.degrees(ang)
 
+    def dihedral(
+        self,
+        atoms: AtomsIndex,
+        rad: bool = False,
+    ) -> Union[float, ndarray]:
+        r"""Calculate the dihedral angle defined by four atoms.
+
+        The dihehral angle is defined between 2 half-planes.
+
+        The first 3 atoms define the first plane
+        The last 3 atoms define the second.
+
+        The dihedral angle is calculated using this formula:
+
+        .. math::
+
+            \mathbf u_0 &= \mathbf r_1 - \mathbf r_0
+            \\
+            \mathbf u_1 &= \mathbf r_2 - \mathbf r_1
+            \\
+            \mathbf u_2 &= \mathbf r_3 - \mathbf r_2
+            \\
+            \phi &= \operatorname{atan2}\Big(\hat\mathbf u_0\dot
+                (\hat\mathbf u_1\times\hat\mathbf u_2),
+                (\hat\mathbf u_0\times\hat\mathbf u_1)\dot
+                (\hat\mathbf u_1\times\hat\mathbf u_2)
+                \Big)
+
+        Parameters
+        ----------
+        atoms :
+           An array of shape (4,)  or (N, 4) representing the indices of 4 atoms forming the dihedral angle
+        rad :
+           whether the returned value is in radians
+        """
+        atoms = self._sanitize_atoms(atoms)
+        ndim = atoms.ndim
+        if ndim == 1:
+            if len(atoms) != 4:
+                raise ValueError(
+                    f"{self.__class__.__name__}.dihedral requires atoms to be 4 indices"
+                )
+            atoms = [atoms]
+        elif ndim == 2:
+            if atoms.shape[1] != 4:
+                raise ValueError(
+                    f"{self.__class__.__name__}.dihedral requires atoms to be (N, 4) indices"
+                )
+        else:
+            raise ValueError(
+                f"{self.__class__.__name__}.dihedral requires atoms index of shape (4,) or (N, 4)"
+            )
+
+        # The 2 planes are defined by
+        #  r0, r1, r2
+        # and
+        #  r1, r2, r3
+        #   we know that atoms has a dimension of 2!
+        u = diff(self.axyz(atoms), axis=1)
+        # normalize to make algorithm easier
+        u /= fnorm(u)[..., None]
+        # calculate the two planes normal vector
+        n0 = np.cross(u[:, 0], u[:, 1])
+        n1 = np.cross(u[:, 1], u[:, 2])
+
+        # Prepare arguments for atan2
+        y = (u[:, 0] * n1).sum(axis=-1)
+        x = (n0 * n1).sum(axis=-1)
+        # see https://en.wikipedia.org/wiki/Dihedral_angle
+        angles = np.arctan2(y, x)
+
+        if not rad:
+            angles = np.degrees(angles)
+
+        if ndim == 1:
+            return angles[0]
+
+        return angles
+
     def rotate_miller(self, m, v) -> Geometry:
         """Align Miller direction along ``v``
 
@@ -1724,7 +1813,7 @@ class Geometry(
 
         Notes
         -----
-        By default only the periodic axes will be translated to the UC. If
+        By default only the periodic axes (``self.pbc``) will be translated to the UC. If
         translation is required for all axes, supply them directly.
 
         Parameters
@@ -1738,7 +1827,7 @@ class Geometry(
              directions.
         """
         if axes is None:
-            axes = (self.lattice.nsc > 1).nonzero()[0]
+            axes = self.pbc.nonzero()[0]
         elif isinstance(axes, bool):
             if axes:
                 axes = (0, 1, 2)
@@ -1746,6 +1835,7 @@ class Geometry(
                 raise ValueError(
                     "translate2uc with a bool argument can only be True to signal all axes"
                 )
+        axes = map(direction, listify(axes)) | listify
 
         fxyz = self.fxyz
         # move to unit-cell
@@ -2096,7 +2186,7 @@ class Geometry(
             # get offsets from atomic indices (note that this will be per atom)
             isc = self.a2isc(atoms)
             offset = self.lattice.offset(isc)
-            return self.xyz[self.sc2uc(atoms)] + offset
+            return self.xyz[self.asc2uc(atoms)] + offset
 
         # Neither of atoms, or isc are `None`, we add the offset to all coordinates
         return self.axyz(atoms) + self.lattice.offset(isc)
@@ -2272,8 +2362,8 @@ class Geometry(
         R=None,
         atoms: AtomsIndex = None,
         atoms_xyz=None,
-        ret_xyz=False,
-        ret_rij=False,
+        ret_xyz: bool = False,
+        ret_rij: bool = False,
     ):
         """Indices of atoms in a given supercell within a given radius from a given coordinate
 
@@ -2503,7 +2593,7 @@ class Geometry(
             )
             i = np.argmin(d[1])
             # Convert to unitcell atom (and get the one atom)
-            atoms = self.sc2uc(atoms[1][i])
+            atoms = self.asc2uc(atoms[1][i])
             c = c[1][i]
             d = d[1][i]
 
@@ -2986,13 +3076,13 @@ class Geometry(
                 + (orbitals // self.no) * self.na
             )
 
-        isc, orbitals = np.divmod(_a.asarrayi(orbitals.ravel()), self.no)
-        a = list_index_le(orbitals, self.lasto)
+        isc, orbitals = np.divmod(_a.asarrayi(orbitals), self.no)
+        a = list_index_le(orbitals.ravel(), self.lasto).reshape(orbitals.shape)
         if unique:
             return np.unique(a + isc * self.na)
         return a + isc * self.na
 
-    def uc2sc(self, atoms: AtomsIndex, unique: bool = False) -> ndarray:
+    def auc2sc(self, atoms: AtomsIndex, unique: bool = False) -> ndarray:
         """Returns atom from unit-cell indices to supercell indices, possibly removing dublicates
 
         Parameters
@@ -3003,16 +3093,20 @@ class Geometry(
            If True the returned indices are unique and sorted.
         """
         atoms = self._sanitize_atoms(atoms) % self.na
-        atoms = (
-            atoms.reshape(1, -1) + _a.arangei(self.n_s).reshape(-1, 1) * self.na
-        ).ravel()
+        atoms = (atoms[..., None] + _a.arangei(self.n_s) * self.na).reshape(
+            *atoms.shape[:-1], -1
+        )
         if unique:
             return np.unique(atoms)
         return atoms
 
-    auc2sc = uc2sc
+    uc2sc = deprecation(
+        "uc2sc is deprecated, update the code to use the explicit form auc2sc",
+        "0.15.0",
+        "0.16.0",
+    )(auc2sc)
 
-    def sc2uc(self, atoms: AtomsIndex, unique: bool = False) -> ndarray:
+    def asc2uc(self, atoms: AtomsIndex, unique: bool = False) -> ndarray:
         """Returns atoms from supercell indices to unit-cell indices, possibly removing dublicates
 
         Parameters
@@ -3027,7 +3121,11 @@ class Geometry(
             return np.unique(atoms)
         return atoms
 
-    asc2uc = sc2uc
+    sc2uc = deprecation(
+        "sc2uc is deprecated, update the code to use the explicit form asc2uc",
+        "0.15.0",
+        "0.16.0",
+    )(asc2uc)
 
     def osc2uc(self, orbitals: OrbitalsIndex, unique: bool = False) -> ndarray:
         """Orbitals from supercell indices to unit-cell indices, possibly removing dublicates
@@ -3055,10 +3153,9 @@ class Geometry(
            If True the returned indices are unique and sorted.
         """
         orbitals = self._sanitize_orbs(orbitals) % self.no
-        orbitals = (
-            orbitals.reshape(1, *orbitals.shape)
-            + _a.arangei(self.n_s).reshape(-1, *([1] * orbitals.ndim)) * self.no
-        ).ravel()
+        orbitals = (orbitals[..., None] + _a.arangei(self.n_s) * self.no).reshape(
+            *orbitals.shape[:-1], -1
+        )
         if unique:
             return np.unique(orbitals)
         return orbitals
@@ -3077,8 +3174,6 @@ class Geometry(
             atom indices to extract the supercell locations of
         """
         atoms = self._sanitize_atoms(atoms) // self.na
-        if atoms.ndim > 1:
-            atoms = atoms.ravel()
         return self.lattice.sc_off[atoms, :]
 
     # This function is a bit weird, it returns a real array,
@@ -3101,8 +3196,6 @@ class Geometry(
         Returns a vector of 3 numbers with integers.
         """
         orbitals = self._sanitize_orbs(orbitals) // self.no
-        if orbitals.ndim > 1:
-            orbitals = orbitals.ravel()
         return self.lattice.sc_off[orbitals, :]
 
     def o2sc(self, orbitals: OrbitalsIndex) -> ndarray:
@@ -3111,7 +3204,14 @@ class Geometry(
         """
         return self.lattice.offset(self.o2isc(orbitals))
 
-    def equal(self, other: GeometryLike, R: bool = True, tol: float = 1e-4) -> bool:
+    @deprecate_argument(
+        "tol",
+        "atol",
+        "argument tol has been deprecated in favor of atol, please update your code.",
+        "0.15",
+        "0.16",
+    )
+    def equal(self, other: GeometryLike, R: bool = True, atol: float = 1e-4) -> bool:
         """Whether two geometries are the same (optional not check of the orbital radius)
 
         Parameters
@@ -3120,14 +3220,14 @@ class Geometry(
             the other Geometry to check against
         R :
             if True also check if the orbital radii are the same (see `Atom.equal`)
-        tol :
+        atol :
             tolerance for checking the atomic coordinates
         """
         other = self.new(other)
         if not isinstance(other, Geometry):
             return False
-        same = self.lattice.equal(other.lattice, tol=tol)
-        same = same and np.allclose(self.xyz, other.xyz, atol=tol)
+        same = self.lattice.equal(other.lattice, atol=atol)
+        same = same and np.allclose(self.xyz, other.xyz, atol=atol)
         same = same and self.atoms.equal(other.atoms, R)
         return same
 
@@ -3187,11 +3287,18 @@ class Geometry(
 
         return rij
 
+    @deprecate_argument(
+        "tol",
+        "atol",
+        "argument tol has been deprecated in favor of atol, please update your code.",
+        "0.15",
+        "0.16",
+    )
     def distance(
         self,
         atoms: AtomsIndex = None,
         R: Optional[float] = None,
-        tol: float = 0.1,
+        atol: Union[float, Sequence[float]] = 0.1,
         method: Union[
             Callable[[Sequence[float]], float],
             Literal["average", "mode", "<numpy.method>"],
@@ -3207,14 +3314,14 @@ class Geometry(
            the maximum radius to consider, default to ``self.maxR()``.
            To retrieve all distances for atoms within the supercell structure
            you can pass `numpy.inf`.
-        tol : float or array_like, optional
+        atol :
            the tolerance for grouping a set of atoms.
            This parameter sets the shell radius for each shell.
            I.e. the returned distances between two shells will be maximally
-           ``2*tol``, but only if atoms are within two consecutive lists.
+           ``2*atol``, but only if atoms are within two consecutive lists.
            If this is a list, the shells will be of unequal size.
 
-           The first shell size will be ``tol * .5`` or ``tol[0] * .5`` if `tol` is a list.
+           The first shell size will be ``atol * .5`` or ``atol[0] * .5`` if `atol` is a list.
 
         method :
            How the distance in each shell is determined.
@@ -3237,11 +3344,11 @@ class Geometry(
         >>> geom = Geometry([0]*3, Atom(1, R=1.), lattice=Lattice(1., nsc=[5, 5, 1]))
         >>> geom.distance()
         array([1.])
-        >>> geom.distance(tol=[0.5, 0.4, 0.3, 0.2])
+        >>> geom.distance(atol=[0.5, 0.4, 0.3, 0.2])
         array([1.])
-        >>> geom.distance(R=2, tol=[0.5, 0.4, 0.3, 0.2])
+        >>> geom.distance(R=2, atol=[0.5, 0.4, 0.3, 0.2])
         array([1.        ,  1.41421356,  2.        ])
-        >>> geom.distance(R=2, tol=[0.5, 0.7]) # the R = 1 and R = 2 ** .5 gets averaged
+        >>> geom.distance(R=2, atol=[0.5, 0.7]) # the R = 1 and R = 2 ** .5 gets averaged
         array([1.20710678,  2.        ])
 
         Returns
@@ -3265,7 +3372,7 @@ class Geometry(
                     "The internal `maxR()` is negative and thus not set. "
                     "Set an explicit value for `R`."
                 )
-        elif np.any(self.nsc > 1):
+        elif np.any(self.pbc):
             maxR = fnorm(self.cell).max()
             # These loops could be leveraged if we look at angles...
             for i, j, k in product(
@@ -3284,20 +3391,20 @@ class Geometry(
                 R = maxR
 
         # Convert to list
-        tol = _a.asarrayd(tol).ravel()
-        if len(tol) == 1:
+        atol = _a.asarray(atol).ravel()
+        if len(atol) == 1:
             # Now we are in a position to determine the sizes
-            dR = _a.aranged(tol[0] * 0.5, R + tol[0] * 0.55, tol[0])
+            dR = _a.aranged(atol[0] * 0.5, R + atol[0] * 0.55, atol[0])
         else:
-            dR = tol.copy()
+            dR = atol.copy()
             dR[0] *= 0.5
             # The first tolerance, is for it-self, the second
             # has to have the first tolerance as the field
-            dR = _a.cumsumd(np.insert(dR, 1, tol[0]))
+            dR = _a.cumsumd(np.insert(dR, 1, atol[0]))
 
             if dR[-1] < R:
                 # Now finalize dR by ensuring all remaining segments are captured
-                t = tol[-1]
+                t = atol[-1]
 
                 dR = concatenate((dR, _a.aranged(dR[-1] + t, R + t * 0.55, t)))
 
@@ -3355,21 +3462,29 @@ class Geometry(
 
         return d
 
+    @deprecate_argument(
+        "tol",
+        "atol",
+        "argument tol has been deprecated in favor of atol, please update your code.",
+        "0.15",
+        "0.16",
+    )
     def within_inf(
         self,
         lattice: Lattice,
-        periodic: Optional[Sequence[bool]] = None,
-        tol: float = 1e-5,
+        periodic: Optional[Union[Sequence[bool], CellAxes]] = None,
+        atol: float = 1e-5,
         origin: Sequence[float] = (0.0, 0.0, 0.0),
     ) -> Tuple[ndarray, ndarray, ndarray]:
         """Find all atoms within a provided supercell
 
         Note this function is rather different from `close` and `within`.
         Specifically this routine is returning *all* indices for the infinite
-        periodic system (where ``self.nsc > 1`` or `periodic` is true).
+        periodic system. The default periodic directions are ``self.pbc``,
+        unless `periodic` is provided.
 
         Atomic coordinates lying on the boundary of the supercell will be duplicated
-        on the neighboring supercell images. Thus performing `geom.within_inf(geom.lattice)`
+        on the neighboring supercell images. Thus performing ``geom.within_inf(geom.lattice)``
         may result in more atoms than in the structure.
 
         Notes
@@ -3383,10 +3498,10 @@ class Geometry(
             the supercell in which this geometry should be expanded into.
         periodic :
             explicitly define the periodic directions, by default the periodic
-            directions are only where ``self.nsc > 1 & self.pbc``.
-        tol :
-            length tolerance for the fractional coordinates to be on a duplicate site (in Ang).
-            This allows atoms within `tol` of the cell boundaries to be taken as *inside* the
+            directions are only where ``self.pbc``.
+        atol :
+            length tolerance for the coordinates to be on a duplicate site (in Ang).
+            This allows atoms within `atol` of the cell boundaries to be taken as *inside* the
             cell.
         origin :
             origin that is the basis for comparison, default to 0.
@@ -3400,17 +3515,27 @@ class Geometry(
         numpy.ndarray
            integer supercell offsets for `ia` atoms
         """
-        lattice = Lattice.new(lattice)
+        lattice = self.lattice.__class__.new(lattice)
         if periodic is None:
-            periodic = np.logical_and(self.pbc, self.nsc > 1)
+            periodic = self.pbc.nonzero()[0]
+        elif isinstance(periodic, bool):
+            periodic = (0, 1, 2)
         else:
-            periodic = list(periodic)
+            try:
+                periodic = map(direction, listify(periodic)) | listify
+            except:
+                periodic = np.asarray(periodic).nonzero()[0]
+
+        # extract the non-periodic directions
+        non_periodic = filter(lambda i: i not in periodic, range(3)) | listify
 
         if origin is None:
             origin = _a.zerosd(3)
 
         # Our first task is to construct a geometry large
         # enough to fully encompass the supercell
+        # The supercell here defines how big `self` needs to be
+        # to be fully located inside `lattice`.
 
         # 1. Number of times each lattice vector must be expanded to fit
         #    inside the "possibly" larger `lattice`.
@@ -3419,7 +3544,7 @@ class Geometry(
         tile_max = ceil(idx.max(0)).astype(dtype=int32)
 
         # Intrinsic offset (when atomic coordinates are outside primary unit-cell)
-        idx = dot(self.xyz, self.icell.T)
+        idx = self.fxyz
         tmp = floor(idx.min(0))
         tile_min = np.where(tile_min < tmp, tile_min, tmp).astype(dtype=int32)
         tmp = ceil(idx.max(0))
@@ -3433,8 +3558,8 @@ class Geometry(
         tile_min = np.where(tile_min < idx, tile_min, idx).astype(dtype=int32)
 
         # 2. Reduce tiling along non-periodic directions
-        tile_min = np.where(periodic, tile_min, 0)
-        tile_max = np.where(periodic, tile_max, 1)
+        tile_min[non_periodic] = 0
+        tile_max[non_periodic] = 1
 
         # 3. Find the *new* origin according to the *negative* tilings.
         #    This is important for skewed cells as the placement of the new
@@ -3443,6 +3568,7 @@ class Geometry(
 
         # The xyz geometry that fully encompass the (possibly) larger supercell
         tile = tile_max - tile_min
+
         full_geom = (self * tile).translate(big_origin - origin)
 
         # Now we have to figure out all atomic coordinates within
@@ -3450,7 +3576,9 @@ class Geometry(
 
         # Make sure that full_geom doesn't return coordinates outside the unit cell
         # for non periodic directions
-        full_geom.set_nsc([full_geom.nsc[i] if periodic[i] else 1 for i in range(3)])
+        nsc = full_geom.nsc.copy()
+        nsc[non_periodic] = 1
+        full_geom.set_nsc(nsc)
 
         # Now retrieve all atomic coordinates from the full geometry
         xyz = full_geom.axyz(_a.arangei(full_geom.na_s))
@@ -3466,7 +3594,7 @@ class Geometry(
         # Since there are numerical errors for the above operation
         # we *have* to account for possible sign-errors
         # This is done by a length tolerance
-        ftol = tol / fnorm(self.cell).reshape(1, 3)
+        ftol = atol / fnorm(self.cell).reshape(1, 3)
         isc = floor(fxyz - ftol).astype(int32)
 
         # Now we can extract the indices where the two are non-matching.
@@ -3480,7 +3608,7 @@ class Geometry(
 
         # Convert indices to unit-cell indices and also return coordinates and
         # infinite supercell indices
-        return self.sc2uc(idx), xyz, isc
+        return self.asc2uc(idx), xyz, isc
 
     # Create pickling routines
     def __getstate__(self):
@@ -4029,7 +4157,15 @@ class GeometryNewDispatch(AbstractDispatch):
 # Bypass regular Geometry to be returned as is
 class GeometryNewGeometryDispatch(GeometryNewDispatch):
     def dispatch(self, geometry, copy=False):
-        """Return geometry as-is (no copy), for sanitization purposes"""
+        """Return Geometry, for sanitization purposes"""
+        cls = self._get_class()
+        if cls != geometry.__class__:
+            geometry = cls(
+                geometry.xyz.copy(),
+                atoms=geometry.atoms.copy(),
+                lattice=geometry.lattice.copy(),
+            )
+            copy = False
         if copy:
             return geometry.copy()
         return geometry
@@ -4143,7 +4279,7 @@ class GeometryToAseDispatch(GeometryToDispatch):
             symbols=geom.atoms.Z,
             positions=geom.xyz.tolist(),
             cell=geom.cell.tolist(),
-            pbc=geom.nsc > 1,
+            pbc=geom.pbc,
             **kwargs,
         )
 
@@ -4174,10 +4310,10 @@ class GeometryTopymatgenDispatch(GeometryToDispatch):
         xyz = geom.xyz
         species = [PT.Z_label(Z) for Z in geom.atoms.Z]
 
-        if all(self.nsc == 1):
-            # we define a molecule
-            return Molecule(species, xyz, **kwargs)
-        return Structure(lattice, species, xyz, coords_are_cartesian=True, **kwargs)
+        if np.any(self.pbc):
+            return Structure(lattice, species, xyz, coords_are_cartesian=True, **kwargs)
+        # we define a molecule
+        return Molecule(species, xyz, **kwargs)
 
 
 to_dispatch.register("pymatgen", GeometryTopymatgenDispatch)

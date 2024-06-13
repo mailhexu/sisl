@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from functools import reduce
 from numbers import Integral
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Callable, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -79,7 +79,7 @@ def apply(
     geometry: Geometry,
     data,
     func,
-    mapper,
+    mapper: Union[Callable[[int], int], str],
     axis: int = 0,
     segments: Union[Literal["atoms", "orbitals", "all"], Iterator[int]] = "atoms",
 ) -> ndarray:
@@ -101,6 +101,7 @@ def apply(
     mapper : func, optional
         a function transforming the `segments` into some other segments that
         is present in `data`.
+        It can accept anything the `segments` returns.
         If a `str`, it will be equivalent to ``getattr(geometry, mapper)``
     axis :
         axis selector for `data` along which `func` will be applied
@@ -1042,7 +1043,7 @@ def sub(geometry: Geometry, atoms: AtomsIndex) -> Geometry:
     Lattice.fit : update the supercell according to a reference supercell
     Geometry.remove : the negative of this routine, i.e. remove a subset of atoms
     """
-    atoms = geometry.sc2uc(atoms)
+    atoms = geometry.asc2uc(atoms)
     return geometry.__class__(
         geometry.xyz[atoms, :].copy(),
         atoms=geometry.atoms.sub(atoms),
@@ -1067,7 +1068,7 @@ def remove(geometry: Geometry, atoms: AtomsIndex) -> Geometry:
     --------
     Geometry.sub : the negative of this routine, i.e. retain a subset of atoms
     """
-    atoms = geometry.sc2uc(atoms)
+    atoms = geometry.asc2uc(atoms)
     if atoms.size == 0:
         return geometry.copy()
     atoms = np.delete(_a.arangei(geometry.na), atoms)
@@ -1154,7 +1155,7 @@ def rotate(
         if what is None:
             what = "xyz"
         # Only rotate the unique values
-        atoms = geometry.sc2uc(atoms, unique=True)
+        atoms = geometry.asc2uc(atoms, unique=True)
 
     if isinstance(v, Integral):
         v = direction(v, abc=geometry.cell, xyz=np.diag([1, 1, 1]))

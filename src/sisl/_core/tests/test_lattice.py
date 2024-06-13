@@ -586,9 +586,35 @@ def test_lattice_bc_fail():
         lat.set_boundary_condition(b="eusoatuhesoau")
 
 
+def test_new_inherit_class():
+    l = Lattice(1, boundary_condition=Lattice.BC.NEUMANN)
+
+    class MyClass(Lattice):
+        pass
+
+    l2 = MyClass.new(l)
+    assert l2.__class__ == MyClass
+    assert l2 == l
+    l2 = Lattice.new(l)
+    assert l2.__class__ == Lattice
+    assert l2 == l
+
+
 def test_lattice_info():
     lat = Lattice(1, nsc=[3, 3, 3])
     with pytest.warns(sisl.SislWarning) as record:
         lat.set_boundary_condition(b=Lattice.BC.DIRICHLET)
         lat.set_boundary_condition(c=Lattice.BC.PERIODIC)
         assert len(record) == 1
+
+
+def test_lattice_pbc_setter():
+    lat = Lattice(1, nsc=[3, 3, 3])
+    assert np.all(lat.pbc)
+    pbc = [True, False, True]
+    lat.pbc = pbc
+    assert np.all(lat.pbc == pbc)
+    # check that None won't change anything
+    pbc = [False, None, None]
+    lat.pbc = pbc
+    assert np.all(lat.pbc == [False, False, True])

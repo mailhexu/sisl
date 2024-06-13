@@ -406,7 +406,6 @@ class PlotlyFigure(Figure):
 
     @classmethod
     def fig_has_attr(cls, key: str) -> bool:
-        print(key, hasattr(go.Figure, key))
         return hasattr(go.Figure, key)
 
     def __getattr__(self, key):
@@ -591,7 +590,7 @@ class PlotlyFigure(Figure):
         )
 
     def draw_scatter(self, x, y, name=None, marker={}, **kwargs):
-        marker.pop("dash", None)
+        marker = {k: v for k, v in marker.items() if k != "dash"}
         self.draw_line(x, y, name, marker=marker, mode="markers", **kwargs)
 
     def draw_multicolor_scatter(self, *args, **kwargs):
@@ -607,8 +606,9 @@ class PlotlyFigure(Figure):
 
         super().draw_multicolor_line_3D(x, y, z, **kwargs)
 
-    def draw_scatter_3D(self, *args, **kwargs):
-        self.draw_line_3D(*args, mode="markers", **kwargs)
+    def draw_scatter_3D(self, *args, marker={}, **kwargs):
+        marker = {k: v for k, v in marker.items() if k != "dash"}
+        self.draw_line_3D(*args, mode="markers", marker=marker, **kwargs)
 
     def draw_multicolor_scatter_3D(self, *args, **kwargs):
         kwargs["marker"] = self._handle_multicolor_scatter(kwargs["marker"], kwargs)
@@ -644,10 +644,10 @@ class PlotlyFigure(Figure):
                 size=sp_size,
                 color=sp_color,
                 opacity=sp_opacity,
-                name=f"{name}_{i}",
+                name=name,
                 legendgroup=name,
                 showlegend=showlegend,
-                meta=meta,
+                meta={**meta, f"{name}_i": i},
             )
             showlegend = False
 
