@@ -270,6 +270,23 @@ class ncSileSiesta(SileCDFSiesta):
 
         return H.transpose(spin=False, sort=kwargs.get("sort", True))
 
+    def read_soc_hamiltonian(self, **kwargs) -> Hamiltonian:
+        """Returns a spin-orbit coupling Hamiltonian from the underlying NetCDF file"""
+        H = self._r_class_spin(Hamiltonian, **kwargs)
+
+        sp = self.groups["SPARSE"]
+        if sp.variables["H_so_offsite"].unit != "Ry":
+            raise SileError(
+                f"{self}.read_soc_hamiltonian requires the stored matrix to be in Ry!"
+            )
+
+        for i in range(len(H.spin)):
+            H._csr._D[:, i] = sp.variables["H_so_offsite"][i, :] * Ry2eV
+
+        # fix siesta specific notation
+        _mat_spin_convert(H)
+        return H.transpose(spin=False, sort=kwargs.get("sort", True))
+
     def read_dynamical_matrix(self, **kwargs) -> DynamicalMatrix:
         """Returns a dynamical matrix from the underlying NetCDF file
 
