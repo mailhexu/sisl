@@ -17,8 +17,11 @@ except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         """\
 sisl.viz requires additional packages.
- - conda install nodify plotly netCDF4 scikit-image pathos
- - pip install sisl[viz]"""
+Install them with pip:
+   pip install sisl[viz]
+Or conda (only possible if inside a conda environment):
+   conda install nodify plotly netCDF4 scikit-image pathos
+"""
     ) from e
 
 # Placeholders for 'plot' attributes are set in the classes while
@@ -27,14 +30,9 @@ sisl.viz requires additional packages.
 from sisl._environ import register_environ_variable
 from sisl._lazy_viz import clear_viz_placeholders
 
-try:
-    _nprocs = len(os.sched_getaffinity(0))
-except Exception:
-    _nprocs = 1
-
 register_environ_variable(
     "SISL_VIZ_NUM_PROCS",
-    min(1, _nprocs),
+    1,
     description="Maximum number of processors used for parallel plotting",
     process=int,
 )
