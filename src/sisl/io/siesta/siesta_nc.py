@@ -48,6 +48,12 @@ class ncSileSiesta(SileCDFSiesta):
     """Generic NetCDF output file containing a large variety of information"""
 
     @lru_cache(maxsize=1)
+    def read_qtot(self):
+        """Reads a dimension from the NetCDF file"""
+        return self._value("Qtot")[:]
+
+
+    @lru_cache(maxsize=1)
     def read_lattice_nsc(self):
         """Returns number of supercell connections"""
         return np.array(self._value("nsc"), np.int32)
@@ -275,13 +281,13 @@ class ncSileSiesta(SileCDFSiesta):
         H = self._r_class_spin(Hamiltonian, **kwargs)
 
         sp = self.groups["SPARSE"]
-        if sp.variables["H_so_offsite"].unit != "Ry":
+        if sp.variables["H_so"].unit != "Ry":
             raise SileError(
                 f"{self}.read_soc_hamiltonian requires the stored matrix to be in Ry!"
             )
 
         for i in range(len(H.spin)):
-            H._csr._D[:, i] = sp.variables["H_so_offsite"][i, :] * Ry2eV
+            H._csr._D[:, i] = sp.variables["H_so"][i, :] * Ry2eV
 
         # fix siesta specific notation
         _mat_spin_convert(H)

@@ -962,6 +962,34 @@ class fdfSileSiesta(SileSiesta):
             return fcSileSiesta(f).read_hessian(na=na)
         return None
 
+    def read_qtot(self, *args, **kwargs) -> float:
+        """Read total charge from the output of the calculation
+
+        Returns
+        -------
+        float
+            the total charge
+        """
+        order = _parse_order(kwargs.pop("order", None), ["nc"])
+        for f in order:
+            v = getattr(self, f"_r_qtot_{f.lower()}")(*args, **kwargs)
+            if v is not None:
+                if self.track:
+                    info(f"{self.file}(read_qtot) found in file={f}")
+                return v
+        return None
+
+    def _r_qtot_nc(self, *args, **kwargs):
+        """
+        Read total charge from the nc file
+        """
+        f = self.dir_file(self.get("SystemLabel", default="siesta") + ".nc")
+        _track_file(self._r_qtot_nc, f, inputs=[("CDF.Save", "True")])
+        if f.is_file():
+            return ncSileSiesta(f).read_qtot()
+        return None
+
+
     def read_fermi_level(self, *args, **kwargs) -> float:
         """Read fermi-level from output of the calculation
 
@@ -2239,6 +2267,26 @@ class fdfSileSiesta(SileSiesta):
             S = onlysSileSiesta(f).read_overlap(*args, **kwargs)
         return S
 
+
+    def read_soc_hamiltonian(self, *args, **kwargs) -> Hamiltonian:
+        """
+        Try and read the SOC Hamiltonian by reading the <>.nc
+        """
+        order = _parse_order(kwargs.pop("order", None), ["nc"])
+        for f in order:
+            H = getattr(self, f"_r_soc_hamiltonian_{f.lower()}")(*args, **kwargs)
+            if H is not None:
+                return H
+        return None
+
+    def _r_soc_hamiltonian_nc(self, *args, **kwargs):
+        """Read SOC Hamiltonian from the nc file"""
+        f = self.dir_file(self.get("SystemLabel", default="siesta") + ".nc")
+        _track_file(self._r_soc_hamiltonian_nc, f, inputs=[("CDF.Save", "True")])
+        if f.is_file():
+            return ncSileSiesta(f).read_soc_hamiltonian(*args, **kwargs)
+        return None
+
     def read_hamiltonian(self, *args, **kwargs) -> Hamiltonian:
         """Try and read the Hamiltonian by reading the <>.nc, <>.TSHS files, <>.HSX (in that order)
 
@@ -2298,6 +2346,7 @@ class fdfSileSiesta(SileSiesta):
                 else:
                     H.shift(-Ef)
         return H
+
 
     @default_ArgumentParser(description="Manipulate a FDF file.")
     def ArgumentParser(self, p=None, *args, **kwargs):
