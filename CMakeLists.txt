@@ -1,13 +1,7 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.21 FATAL_ERROR)
 # We will use cmake_path for file-name manipulation
 
 list(APPEND CMAKE_MESSAGE_CONTEXT "sisl")
-
-message(STATUS "Building with CMake version: ${CMAKE_VERSION}")
-if(SKBUILD)
-  message(STATUS "Building with scikit-build-core: ${SKBUILD_CORE_VERSION}")
-endif()
-
 
 project(sisl
   DESCRIPTION "Cythonized or fortran codes"
@@ -20,6 +14,20 @@ project(sisl
 # Print out the discovered paths
 include(CMakePrintHelpers)
 
+# Build configuration details
+message(STATUS "Build configuration information")
+list(APPEND CMAKE_MESSAGE_INDENT "  ")
+cmake_print_variables(CMAKE_VERSION)
+cmake_print_variables(CMAKE_BUILD_TYPE)
+cmake_print_variables(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+cmake_print_variables(CMAKE_POSITION_INDEPENDENT_CODE)
+cmake_print_variables(CMAKE_INSTALL_PREFIX)
+cmake_print_variables(CMAKE_PREFIX_PATH)
+if(SKBUILD)
+  message(STATUS "scikit-build-core: ${SKBUILD_CORE_VERSION}")
+endif()
+list(POP_BACK CMAKE_MESSAGE_INDENT)
+
 # Enable python packages
 find_package(Python COMPONENTS
   Interpreter
@@ -28,31 +36,42 @@ find_package(Python COMPONENTS
   REQUIRED)
 
 # Retrive the cython executable
-message(STATUS "Locating Cython executable")
-find_program(CYTHON_EXECUTABLE "cython" REQUIRED)
+message(CHECK_START "Checking Cython")
+list(APPEND CMAKE_MESSAGE_INDENT "  ")
+
+message(CHECK_START "Locating executable")
+find_program(CYTHON_EXECUTABLE
+  NAMES cython cython3
+  NO_CACHE
+  REQUIRED)
+message(CHECK_PASS "${CYTHON_EXECUTABLE}")
+
+message(CHECK_START "Checking version")
 execute_process(COMMAND
   "${CYTHON_EXECUTABLE}" --version
-  OUTPUT_QUIET
   OUTPUT_VARIABLE CYTHON_VERSION
   RESULT_VARIABLE CYTHON_VERSION_ERR
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_STRIP_TRAILING_WHITESPACE)
 
 # Print it out
-message(STATUS "Cython version information [${CYTHON_EXECUTABLE} --version]: ${CYTHON_VERSION}")
 if(CYTHON_VERSION_ERR)
-  message(SEND_ERROR "ERROR: Cython version detection failed, this might be problematic")
+  message(CHECK_FAIL "${CYTHON_VERSION_ERR}")
+else()
+  message(CHECK_PASS "${CYTHON_VERSION}")
 endif()
+list(POP_BACK CMAKE_MESSAGE_INDENT)
+message(CHECK_PASS "Found Cython")
 
 
 # Define global definitions
 # We will never use the deprecated API any-more
-add_compile_definitions(NPY_NO_DEPRECATED_API=0)
+add_compile_definitions(NPY_NO_DEPRECATED_API=NPY_1_20_API_VERSION)
 add_compile_definitions(CYTHON_NO_PYINIT_EXPORT=1)
 
 # All libraries in sisl will *not* be prefixed with
 #: lib, perhaps we should change this
 set(CMAKE_SHARED_MODULE_PREFIX "")
-
 
 # Determine whether we are in CIBUILDWHEEL
 # and whether we are building for the universal target
@@ -65,10 +84,12 @@ set(_def_fortran TRUE)
 #endif()
 
 option(WITH_FORTRAN
-  "Whether to compile and ship fortran sources (default True)" ${_def_fortran})
+  "Whether to compile and ship fortran sources (default ${_def_fortran})" ${_def_fortran})
 
 # Define all options for the user
 if( WITH_FORTRAN )
+  enable_language(Fortran)
+
   set(F2PY_REPORT_ON_ARRAY_COPY 10
     CACHE STRING
     "The minimum (element) size of arrays before warning about copies")
@@ -87,6 +108,11 @@ option(WITH_ANNOTATE
 option(WITH_GDB
   "Add GDB-enabled Cython sources" FALSE)
 
+# Define which pure-python modules that should not be built
+set(NO_COMPILATION ""
+  CACHE STRING
+  "A list of files that should not be compiled [_sparse_grid_ops|_sparse_grid_ops.py]")
+
 
 message(STATUS "Compilation flags")
 list(APPEND CMAKE_MESSAGE_INDENT "  ")
@@ -97,12 +123,14 @@ cmake_print_variables(CC)
 cmake_print_variables(CFLAGS)
 cmake_print_variables(CMAKE_C_COMPILER)
 cmake_print_variables(CMAKE_C_FLAGS)
+cmake_print_variables(CMAKE_C_STANDARD)
 set(CXX $ENV{CXX})
 set(CXXFLAGS $ENV{CXXFLAGS})
 cmake_print_variables(CXX)
 cmake_print_variables(CXXFLAGS)
 cmake_print_variables(CMAKE_CXX_COMPILER)
 cmake_print_variables(CMAKE_CXX_FLAGS)
+cmake_print_variables(CMAKE_CXX_STANDARD)
 if(WITH_FORTRAN)
   set(FC $ENV{FC})
   set(FFLAGS $ENV{FFLAGS})
@@ -110,11 +138,13 @@ if(WITH_FORTRAN)
   cmake_print_variables(FFLAGS)
   cmake_print_variables(CMAKE_Fortran_COMPILER)
   cmake_print_variables(CMAKE_Fortran_FLAGS)
+  cmake_print_variables(CMAKE_Fortran_STANDARD)
 endif()
 set(ARCHFLAGS $ENV{ARCHFLAGS})
 cmake_print_variables(ARCHFLAGS)
 if( APPLE )
   cmake_print_variables(CMAKE_OSX_ARCHITECTURES)
+  cmake_print_variables(CMAKE_OSX_DEPLOYMENT_TARGET)
   cmake_print_variables(CMAKE_APPLE_ARCH_SYSROOTS)
   cmake_print_variables(CMAKE_OSX_SYSROOT_PATH)
 elseif( WIN32 )
@@ -129,6 +159,7 @@ list(POP_BACK CMAKE_MESSAGE_INDENT)
 
 # Parse Cython global options
 if(WITH_COVERAGE)
+  add_compile_definitions(CYTHON_TRACE=1)
   add_compile_definitions(CYTHON_TRACE_NOGIL=1)
 endif()
 if(WITH_ANNOTATE)
@@ -191,6 +222,18 @@ if(WITH_FORTRAN)
 endif(WITH_FORTRAN)
 
 
+message(STATUS "Python variables:")
+list(APPEND CMAKE_MESSAGE_INDENT "  ")
+
+cmake_print_variables(Python_INCLUDE_DIRS)
+cmake_print_variables(Python_NumPy_INCLUDE_DIRS)
+if(WITH_FORTRAN)
+  cmake_print_variables(Python_NumPy_F2Py_INCLUDE_DIR)
+endif()
+
+list(POP_BACK CMAKE_MESSAGE_INDENT)
+
+
 message(STATUS "sisl options")
 list(APPEND CMAKE_MESSAGE_INDENT "  ")
 
@@ -198,6 +241,7 @@ cmake_print_variables(WITH_COVERAGE)
 cmake_print_variables(WITH_ANNOTATE)
 cmake_print_variables(WITH_LINE_DIRECTIVES)
 cmake_print_variables(WITH_GDB)
+cmake_print_variables(NO_COMPILATION)
 
 cmake_print_variables(WITH_FORTRAN)
 if(WITH_FORTRAN)
@@ -211,16 +255,52 @@ endif()
 list(POP_BACK CMAKE_MESSAGE_INDENT)
 
 
-message(STATUS "Python variables:")
-list(APPEND CMAKE_MESSAGE_INDENT "  ")
 
-cmake_print_variables(Python_INCLUDE_DIRS)
-cmake_print_variables(Python_NumPy_INCLUDE_DIRS)
-if(WITH_FORTRAN)
-  cmake_print_variables(Python_NumPy_F2Py_INCLUDE_DIR)
-endif()
+# Return in _result whether the _file should be built, or not
+# It checks whether the file is present in the NO_COMPILATION
+function(sisl_compile_source _file _result)
 
-list(POP_BACK CMAKE_MESSAGE_INDENT)
+  # By default, we always compile everything
+  set(${_result} TRUE PARENT_SCOPE)
+
+  # Check whether the file is listed in the variable
+
+  # First get the stem of the file path (relative to the sisl source dir)
+  set(in "${CMAKE_CURRENT_SOURCE_DIR}/${_file}")
+  cmake_path(RELATIVE_PATH in
+    BASE_DIRECTORY "${PROJECT_SOURCE_DIR}/src"
+    OUTPUT_VARIABLE base
+    )
+  string(REPLACE "/" ";" base_list "${base}")
+
+  # Loop over the segments of the file
+  list(LENGTH base_list len)
+  math(EXPR len "${len} - 1")
+
+  foreach(i RANGE 0 ${len})
+
+    # Create the path from the list of base_list[i:]
+    list(SUBLIST base_list ${i} -1 path)
+    string(REPLACE ";" "/" path "${path}")
+
+    # Check if the file is present in the file naming list
+    list(FIND NO_COMPILATION "${path}" res1)
+    list(FIND NO_COMPILATION "${path}.py" res2)
+
+    if( res1 GREATER -1 OR res2 GREATER -1 )
+      set(${_result} FALSE PARENT_SCOPE)
+      break()
+    endif()
+
+  endforeach()
+
+endfunction()
+
+
+
+# Below we have the, a bit complicated property setup for the build-mechanism.
+# It allows one to properly define how specific fortran files should be
+# processed by f2py for correct signature creations.
 
 
 # Document the properties that we are dealing with

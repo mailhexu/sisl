@@ -7,15 +7,7 @@ from typing import Optional, Union
 
 import numpy as np
 
-from sisl import (
-    Atom,
-    AtomicOrbital,
-    Atoms,
-    AtomUnknown,
-    Geometry,
-    Orbital,
-    PeriodicTable,
-)
+from sisl import Atom, AtomicOrbital, Atoms, AtomUnknown, Geometry, PeriodicTable
 from sisl._array import arrayi
 from sisl._internal import set_module
 from sisl.messages import deprecate_argument
@@ -50,13 +42,14 @@ class orbindxSileSiesta(SileSiesta):
 
         for _ in range(no_s):
             line = self.readline().split()
-            isc = list(map(int_abs, line[12:15]))
-            if isc[0] > nsc[0]:
-                nsc[0] = isc[0]
-            if isc[1] > nsc[1]:
-                nsc[1] = isc[1]
-            if isc[2] > nsc[2]:
-                nsc[2] = isc[2]
+            if len(line) == 16:
+                isc = list(map(int_abs, line[12:15]))
+                if isc[0] > nsc[0]:
+                    nsc[0] = isc[0]
+                if isc[1] > nsc[1]:
+                    nsc[1] = isc[1]
+                if isc[2] > nsc[2]:
+                    nsc[2] = isc[2]
 
         return arrayi([n * 2 + 1 for n in nsc])
 
@@ -66,7 +59,7 @@ class orbindxSileSiesta(SileSiesta):
         "atoms",
         "use atoms instead of basis",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def read_basis(self, atoms: Optional[Union[Atoms, Geometry]] = None) -> Atoms:
         """Returns a set of atoms corresponding to the basis-sets in the ORB_INDX file

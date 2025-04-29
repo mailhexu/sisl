@@ -9,13 +9,13 @@ r"""Bloch's theorem
 Bloch's theorem is a very powerful proceduce that enables one to utilize
 the periodicity of a given direction to describe the complete system.
 """
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
-from numpy import add, empty, exp, multiply, zeros
+from numpy import empty
 
 import sisl._array as _a
-from sisl._help import dtype_real_to_complex
+from sisl._help import dtype_float_to_complex
 from sisl._internal import set_module
 from sisl.typing import KPoint
 
@@ -165,7 +165,7 @@ class Bloch:
         K_unfold = self.unfold_points(k)
         M0 = func(*args, k=K_unfold[0, :], **kwargs)
         shape = (K_unfold.shape[0], M0.shape[0], M0.shape[1])
-        M = empty(shape, dtype=dtype_real_to_complex(M0.dtype))
+        M = empty(shape, dtype=dtype_float_to_complex(M0.dtype))
         M[0] = M0
         del M0
         for i in range(1, K_unfold.shape[0]):

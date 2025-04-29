@@ -89,6 +89,7 @@ Sparse matrices
 
 """
 
+from ._common import *
 from ._feature import *
 from .distribution import *
 from .sparse import *
@@ -133,6 +134,7 @@ from ._brillouinzone_apply import *
 from ._ufuncs_brillouinzone import *
 from ._ufuncs_densitymatrix import *
 from ._ufuncs_dynamicalmatrix import *
+from ._ufuncs_electron import *
 from ._ufuncs_energydensitymatrix import *
 from ._ufuncs_hamiltonian import *
 from ._ufuncs_overlap import *

@@ -3,8 +3,6 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 from __future__ import annotations
 
-import math as m
-
 import numpy as np
 import pytest
 
@@ -86,6 +84,14 @@ def setup():
             self.func = func
 
     return t()
+
+
+@pytest.fixture(
+    scope="module",
+    params=["direct", "pre-compute"],
+)
+def density_method(request):
+    return request.param
 
 
 @pytest.mark.physics
@@ -183,14 +189,14 @@ class TestDensityMatrix:
             assert isinstance(BO, SparseOrbital)
             assert BO.shape[:2] == (D.geometry.no, D.geometry.no_s)
 
-    def test_rho1(self, setup):
+    def test_rho1(self, setup, density_method):
         D = setup.D.copy()
         D.construct(setup.func)
         grid = Grid(0.2, geometry=setup.D.geometry)
-        D.density(grid)
+        D.density(grid, method=density_method)
 
-    @pytest.mark.filterwarnings("ignore", message="*is NOT Hermitian for on-site")
-    def test_rho2(self):
+    @pytest.mark.filterwarnings("ignore", message="*non-Hermitian on-site")
+    def test_rho2(self, density_method):
         bond = 1.42
         sq3h = 3.0**0.5 * 0.5
         lattice = Lattice(
@@ -214,23 +220,23 @@ class TestDensityMatrix:
         D = DensityMatrix(g)
         D.construct([[0.1, bond + 0.01], [1.0, 0.1]])
         grid = Grid(0.2, geometry=D.geometry)
-        D.density(grid)
+        D.density(grid, method=density_method)
 
         D = DensityMatrix(g, spin=Spin("P"))
         D.construct([[0.1, bond + 0.01], [(1.0, 0.5), (0.1, 0.1)]])
         grid = Grid(0.2, geometry=D.geometry)
-        D.density(grid)
-        D.density(grid, [1.0, -1])
-        D.density(grid, 0)
-        D.density(grid, 1)
+        D.density(grid, method=density_method)
+        D.density(grid, [1.0, -1], method=density_method)
+        D.density(grid, 0, method=density_method)
+        D.density(grid, 1, method=density_method)
 
         D = DensityMatrix(g, spin=Spin("NC"))
         D.construct(
             [[0.1, bond + 0.01], [(1.0, 0.5, 0.01, 0.01), (0.1, 0.1, 0.1, 0.1)]]
         )
         grid = Grid(0.2, geometry=D.geometry)
-        D.density(grid)
-        D.density(grid, [[1.0, 0.0], [0.0, -1]])
+        D.density(grid, method=density_method)
+        D.density(grid, [[1.0, 0.0], [0.0, -1]], method=density_method)
 
         D = DensityMatrix(g, spin=Spin("SO"))
         D.construct(
@@ -243,13 +249,13 @@ class TestDensityMatrix:
             ]
         )
         grid = Grid(0.2, geometry=D.geometry)
-        D.density(grid)
-        D.density(grid, [[1.0, 0.0], [0.0, -1]])
-        D.density(grid, Spin.X)
-        D.density(grid, Spin.Y)
-        D.density(grid, Spin.Z)
+        D.density(grid, method=density_method)
+        D.density(grid, [[1.0, 0.0], [0.0, -1]], method=density_method)
+        D.density(grid, Spin.X, method=density_method)
+        D.density(grid, Spin.Y, method=density_method)
+        D.density(grid, Spin.Z, method=density_method)
 
-    @pytest.mark.filterwarnings("ignore", message="*is NOT Hermitian for on-site")
+    @pytest.mark.filterwarnings("ignore", message="*non-Hermitian on-site")
     def test_orbital_momentum(self):
         bond = 1.42
         sq3h = 3.0**0.5 * 0.5
@@ -307,6 +313,7 @@ class TestDensityMatrix:
         v = np.array([1, 2, 3])
         d = D.spin_align(v)
         d_mull = d.mulliken()
+        assert np.allclose(d_mull, d.astype(np.complex128).mulliken())
         assert d_mull.shape == (4, len(D))
 
         assert not np.allclose(D_mull[1], d_mull[3])
@@ -338,10 +345,11 @@ class TestDensityMatrix:
         v = np.array([1, 2, 3])
         d = D.spin_align(v)
         d_mull = d.mulliken()
+        assert np.allclose(d_mull, d.astype(np.complex128).mulliken())
         assert not np.allclose(D_mull, d_mull)
         assert np.allclose(D_mull[0], d_mull[0])
 
-    @pytest.mark.filterwarnings("ignore", message="*is NOT Hermitian for on-site")
+    @pytest.mark.filterwarnings("ignore", message="*non-Hermitian on-site")
     def test_spin_align_so(self):
         bond = 1.42
         sq3h = 3.0**0.5 * 0.5
@@ -374,6 +382,7 @@ class TestDensityMatrix:
         v = np.array([1, 2, 3])
         d = D.spin_align(v, atoms=0)
         d_mull = d.mulliken()
+        assert np.allclose(d_mull, d.astype(np.complex128).mulliken())
         assert not np.allclose(D_mull, d_mull)
         assert np.allclose(D_mull[0], d_mull[0])
 
@@ -399,6 +408,7 @@ class TestDensityMatrix:
         D.construct([[0.1, bond + 0.01], [(1.0, 0.5), (0.1, 0.2)]])
 
         D_mull = D.mulliken()
+        assert np.allclose(D_mull, D.astype(np.complex128).mulliken())
         assert D_mull.shape == (2, len(D))
 
         d = D.spin_rotate([45, 60, 90], rad=False)
@@ -407,6 +417,47 @@ class TestDensityMatrix:
 
         assert not np.allclose(D_mull[1], d_mull[3])
         assert np.allclose(D_mull[0], d_mull[0])
+
+    def test_spin_rotate_pol_full(self):
+        bond = 1.42
+        sq3h = 3.0**0.5 * 0.5
+        lattice = Lattice(
+            np.array(
+                [[1.5, sq3h, 0.0], [1.5, -sq3h, 0.0], [0.0, 0.0, 10.0]], np.float64
+            )
+            * bond,
+            nsc=[3, 3, 1],
+        )
+
+        orb = AtomicOrbital("px", R=bond * 1.001)
+        C = Atom(6, orb)
+        g = Geometry(
+            np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], np.float64) * bond,
+            atoms=C,
+            lattice=lattice,
+        )
+        D = DensityMatrix(g, spin=Spin("p"))
+        D.construct([[0.1, bond + 0.01], [(1.0, 0), (0.1, 0.0)]])
+
+        D_mull = D.mulliken()
+        assert np.allclose(D_mull, D.astype(np.complex128).mulliken())
+        assert D_mull.shape == (2, len(D))
+
+        # Euler (noop)
+        d = D.spin_rotate([0, 0, 64], rad=False)
+        assert d.spin.is_polarized
+        assert np.allclose(d.mulliken()[1], D.mulliken()[1])
+        d = D.spin_rotate([180, 180, 64], rad=False)
+        assert d.spin.is_polarized
+        assert np.allclose(d.mulliken()[1], D.mulliken()[1])
+
+        # Euler (full)
+        d = D.spin_rotate([0, 180, 64], rad=False)
+        assert d.spin.is_polarized
+        assert np.allclose(d.mulliken()[1], -D.mulliken()[1])
+        d = D.spin_rotate([180, 0, 64], rad=False)
+        assert d.spin.is_polarized
+        assert np.allclose(d.mulliken()[1], -D.mulliken()[1])
 
     def test_spin_rotate_nc(self):
         bond = 1.42
@@ -432,6 +483,7 @@ class TestDensityMatrix:
         )
 
         D_mull = D.mulliken()
+        assert np.allclose(D_mull, D.astype(np.complex128).mulliken())
         d = D.spin_rotate([45, 60, 90], rad=False)
 
         d_mull = d.mulliken()
@@ -439,7 +491,7 @@ class TestDensityMatrix:
         assert not np.allclose(D_mull, d_mull)
         assert np.allclose(D_mull[0], d_mull[0])
 
-    @pytest.mark.filterwarnings("ignore", message="*is NOT Hermitian for on-site")
+    @pytest.mark.filterwarnings("ignore", message="*non-Hermitian on-site")
     def test_spin_rotate_so(self):
         bond = 1.42
         sq3h = 3.0**0.5 * 0.5
@@ -469,25 +521,26 @@ class TestDensityMatrix:
             ]
         )
         D_mull = D.mulliken()
+        assert np.allclose(D_mull, D.astype(np.complex128).mulliken())
         d = D.spin_rotate([45, 60, 90], rad=False)
         d_mull = d.mulliken()
         assert not np.allclose(D_mull, d_mull)
         assert np.allclose(D_mull[0], d_mull[0])
 
-    def test_rho_eta(self, setup):
+    def test_rho_eta(self, setup, density_method):
         D = setup.D.copy()
         D.construct(setup.func)
         grid = Grid(0.2, geometry=setup.D.geometry)
-        D.density(grid, eta=True)
+        D.density(grid, eta=True, method=density_method)
 
-    def test_rho_smaller_grid1(self, setup):
+    def test_rho_smaller_grid1(self, setup, density_method):
         D = setup.D.copy()
         D.construct(setup.func)
         lattice = setup.D.geometry.cell.copy() / 2
         grid = Grid(0.2, geometry=setup.D.geometry.copy(), lattice=lattice)
-        D.density(grid)
+        D.density(grid, method=density_method)
 
-    def test_rho_fail_p(self):
+    def test_rho_fail_p(self, density_method):
         bond = 1.42
         sq3h = 3.0**0.5 * 0.5
         lattice = Lattice(
@@ -513,9 +566,9 @@ class TestDensityMatrix:
         D.construct([[0.1, bond + 0.01], [(1.0, 0.5), (0.1, 0.1)]])
         grid = Grid(0.2, geometry=D.geometry)
         with pytest.raises(ValueError):
-            D.density(grid, [1.0, -1, 0.0])
+            D.density(grid, [1.0, -1, 0.0], method=density_method)
 
-    def test_rho_fail_nc(self):
+    def test_rho_fail_nc(self, density_method):
         bond = 1.42
         sq3h = 3.0**0.5 * 0.5
         lattice = Lattice(
@@ -543,7 +596,7 @@ class TestDensityMatrix:
         )
         grid = Grid(0.2, geometry=D.geometry)
         with pytest.raises(ValueError):
-            D.density(grid, [1.0, 0.0])
+            D.density(grid, [1.0, 0.0], method=density_method)
 
     def test_pickle(self, setup):
         import pickle as p
@@ -562,7 +615,7 @@ class TestDensityMatrix:
             D[ia, ia] = a
         Dcsr = [D.tocsr(i) for i in range(D.shape[2])]
 
-        Dt = D.transform(spin="unpolarized", dtype=np.float32)
+        Dt = D.transform(spin="unpolarized").astype(np.float32)
         assert np.abs(0.5 * Dcsr[0] + 0.5 * Dcsr[1] - Dt.tocsr(0)).sum() == 0
 
         Dt = D.transform(spin="polarized", orthogonal=False)
@@ -584,7 +637,7 @@ class TestDensityMatrix:
         for ia in setup.g:
             D[ia, ia] = a
 
-        Dt = D.transform(spin="unpolarized", dtype=np.float32)
+        Dt = D.transform(spin="unpolarized").astype(np.float32)
         assert np.abs(0.5 * D.tocsr(0) + 0.5 * D.tocsr(1) - Dt.tocsr(0)).sum() == 0
         assert np.abs(D.tocsr(-1) - Dt.tocsr(-1)).sum() == 0
         Dt = D.transform(spin="polarized")

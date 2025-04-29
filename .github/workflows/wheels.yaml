@@ -5,13 +5,9 @@ name: Wheel creation
 on:
   push:
     tags:
-     - 'v*'
+      - 'v*'
   workflow_dispatch:
     inputs:
-      branch:
-        description: 'Which branch to build wheels for'
-        required: false
-        default: 'main'
       release:
         description: 'Release the wheels?'
         type: boolean
@@ -22,102 +18,151 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+
+permissions:
+  contents: read
+
 jobs:
 
-    # cibuildwheels already manages multiple python versions automatically
-    # by just detecting the os. However, it does everything in the same job
-    # and therefore in a serial manner. We build a matrix of operating systems
-    # and python versions so that builds are ran in parallel.
-    # The job matrix is basically copied from https://github.com/scikit-learn/scikit-learn/blob/main/.github/workflows/wheels.yml
-  build_wheels:
-    name: Wheel building
+  # cibuildwheels already manages multiple python versions automatically
+  # by just detecting the os. However, it does everything in the same job
+  # and therefore in a serial manner. We build a matrix of operating systems
+  # and python versions so that builds are ran in parallel.
+  # The job matrix is basically copied from https://github.com/scikit-learn/scikit-learn/blob/main/.github/workflows/wheels.yml
+  wheels:
+    name: ${{ matrix.os }} for ${{ matrix.cibw_archs }}
     runs-on: ${{ matrix.os }}
+    needs: sdist
+
+    env:
+      CIBW_BUILD_VERBOSITY: 1
+      CIBW_BEFORE_BUILD: >-
+        rm -rf {package}/build
+      # Instead of running pytest directly, we use a bash script that will set up
+      # the appropriate value for the SISL_FILES_TEST variable, a path pointing to
+      # the sisl-files directory, which contains files for testing.
+      CIBW_TEST_COMMAND: >-
+        bash {project}/tools/build_tools/test_wheels.sh
+      CIBW_TEST_REQUIRES: "joblib"
+      CIBW_TEST_EXTRAS: "test"
+
+      CIBW_SKIP: "*-musllinux_aarch64 pp*"
+      # Deployment of the SDK in MacOS
+      MACOSX_DEPLOYMENT_TARGET: "${{ matrix.deployment_target }}"
+
     strategy:
-      # If one of the jobs fails, continue with the others.
+      # Ensure that a wheel builder finishes even if another fails
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14]
-        arch: [auto64]
-        toolchain:
-         - {compiler: gcc, version: 11}
-        exclude:
-         - os: macos-14
-           arch: auto64
         include:
-         - os: macos-14
-           arch: arm64
+          # Linux 64 bit
+          - os: ubuntu-22.04
+            cibw_archs: "x86_64"
+
+          # MacOS x86_64
+          - os: macos-13
+            cibw_archs: "x86_64"
+            deployment_target: "13.0"
+          - os: macos-14
+            cibw_archs: "arm64"
+            deployment_target: "14.0"
 
     steps:
+
+      - name: Set up QEMU
+        if: matrix.cibw_archs == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: actions/checkout@v4
+
+      - name: Ensure fortran
+        uses: fortran-lang/setup-fortran@v1
         with:
-          fetch-depth: 0
-          submodules: false
+          compiler: gcc
+          version: 12
 
-      # Setup the fortran compiler. This is aware of the operating system.
-      - uses: fortran-lang/setup-fortran@main
-        id: sf
+      - name: Build wheels for CPython 3.13
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp313t-* cp313-*"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+          CIBW_BUILD_FRONTEND:
+            "pip; args: --pre --extra-index-url https://pypi.anaconda.org/scientific-python-nightly-wheels/simple"
+          CIBW_ENABLE: "cpython-freethreading"
+          CIBW_BEFORE_TEST: >-
+            pip install --pre
+            --extra-index-url https://pypi.anaconda.org/scientific-python-nightly-wheels/simple
+            numpy scipy
+
+      - name: Build wheels for CPython 3.12
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp312-*"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+
+      - name: Build wheels for CPython 3.11
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp311-*"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+
+      - name: Build wheels for CPython 3.10
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp310-*"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+
+      - name: Build wheels for CPython 3.9
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp39-*"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+
+      - name: Store artifacts
+        uses: actions/upload-artifact@v4
         with:
-          compiler: ${{ matrix.toolchain.compiler }}
-          version: ${{ matrix.toolchain.version }}
-
-      # We use the cibuildwheel action to take care of everything
-      - name: Build wheels (Mac)
-        if: runner.os == 'macOS'
-        uses: pypa/cibuildwheel@v2.18
-        env:
-          CIBW_ARCHS: "${{ matrix.arch }}"
-
-      - name: Build wheels (Linux)
-        if: runner.os == 'Linux'
-        uses: pypa/cibuildwheel@v2.18
-        env:
-          CIBW_ARCHS: "${{ matrix.arch }}"
-          SKBUILD_CMAKE_ARGS: -DCMAKE_Fortran_COMPILER=${{ steps.sf.outputs.fc }};-DCMAKE_C_COMPILER=${{ steps.sf.outputs.cc }}
-
-      - name: Build wheels (Windows)
-        if: runner.os == 'Windows'
-        uses: pypa/cibuildwheel@v2.18
-        env:
-          CIBW_ARCHS: "${{ matrix.arch }}"
-          SKBUILD_CMAKE_ARGS: -DCMAKE_Fortran_COMPILER=${{ steps.sf.outputs.fc }};-DCMAKE_C_COMPILER=${{ steps.sf.outputs.cc }}
-          PIP_NO_CLEAN: "yes"
-
-      # Upload the wheel to the action's articfact.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: artifact-${{ matrix.os }}
+          name: cibw-wheels-${{ runner.os }}-${{ matrix.cibw_archs }}
           path: ./wheelhouse/*.whl
+          if-no-files-found: error
 
   # Build the source distribution as well
-  build_sdist:
+  sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: false
 
       - name: Build sdist
-        run: pipx run build --sdist
+        run: |
+          pipx run build --sdist
 
       - uses: actions/upload-artifact@v4
         with:
+          name: cibw-sdist
           path: dist/*.tar.gz
+          if-no-files-found: error
 
   # Upload to testpypi
   upload_testpypi:
-    needs: [build_sdist, build_wheels]
+    needs: [sdist, wheels]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
     name: Publish package to TestPyPI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: True
+          pattern: cibw-*
           path: dist
+          merge-multiple: True
 
-      - uses: pypa/gh-action-pypi-publish@v1.8.14
+      - name: Print packages
+        run: ls dist
+
+      - uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
           user: __token__
           password: ${{ secrets.TESTPYPI_TOKEN }}
@@ -133,30 +178,47 @@ jobs:
       # If one of the jobs fails, continue with the others.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14]
+        os: [ubuntu-20.04, ubuntu-latest, macos-13, macos-14]
 
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: artifact
-          path: dist
-
       - name: Python installation
         uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
-      # We should also wait for index to update on remote server
-      - name: Install sisl + dependencies
+      - name: Wait for testpypi to catch up
         run: |
-          sleep 10
+          sleep 20
           version=${GITHUB_REF#refs/*/v}
-          version=${version#refs/*/}
-          python -m pip install --progress-bar=off --find-links dist --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ sisl[test,viz]==${version}
+          echo "SISL_VERSION=${version#refs/*/}" >> $GITHUB_ENV
+          ls -lh
+
+      - name: Install sisl + dependencies (oldest numpy, not ARM)
+        if: matrix.os != 'macos-14'
+        run: |
+          python -m pip install -v \
+            --progress-bar=off \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            "sisl[test,viz]==${{ env.SISL_VERSION }}" \
+            "numpy==1.21.*" "scipy==1.6.*" "xarray==0.21.*"
+
+      - name: Install sisl + dependencies (arm)
+        if: matrix.os == 'macos-14'
+        run: |
+          python -m pip install -v \
+            --progress-bar=off \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            "sisl[test,viz]==${{ env.SISL_VERSION }}"
+
+      - name: sisl debug info
+        run: |
+          python -c 'from sisl._debug_info import * ; print_debug_info()'
 
       - name: Test the installation
         run: |
-          pytest --pyargs sisl
+          sdata --help
 
   # Upload to PyPI on every tag
   upload_pypi:
@@ -169,10 +231,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: artifact
+          pattern: cibw-*
           path: dist
+          merge-multiple: True
 
-      - uses: pypa/gh-action-pypi-publish@v1.8.14
+      - uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}

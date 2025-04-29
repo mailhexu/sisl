@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+import importlib.util
 import warnings
 
 import numpy as np
@@ -13,8 +14,8 @@ from ._internal import set_module
 __all__ = ["array_fill_repeat"]
 __all__ += ["isndarray", "isiterable", "voigt_matrix"]
 __all__ += ["get_dtype"]
-__all__ += ["dtype_complex_to_real", "dtype_real_to_complex"]
-__all__ += ["wrap_filterwarnings"]
+__all__ += ["dtype_complex_to_float", "dtype_float_to_complex"]
+__all__ += ["wrap_filterwarnings", "has_module"]
 
 # Wrappers typically used
 __all__ += ["xml_parse"]
@@ -36,6 +37,11 @@ try:
         raise ImportError
 except ImportError:
     from xml.etree.ElementTree import parse as xml_parse
+
+
+def has_module(*args, **kwargs) -> bool:
+    """Wrapper for `importlib.util.find_spec`"""
+    return importlib.util.find_spec(*args, **kwargs)
 
 
 def array_fill_repeat(array, size, axis=-1, cls=None):
@@ -178,7 +184,7 @@ def get_dtype(var, int=None, other=None):  # pylint: disable=W0622
     return dtype
 
 
-def dtype_complex_to_real(dtype):
+def dtype_complex_to_float(dtype):
     """Return the equivalent precision real data-type if the `dtype` is complex"""
     if dtype == np.complex128:
         return np.float64
@@ -187,7 +193,7 @@ def dtype_complex_to_real(dtype):
     return dtype
 
 
-def dtype_real_to_complex(dtype):
+def dtype_float_to_complex(dtype):
     """Return the equivalent precision complex data-type if the `dtype` is real"""
     if dtype == np.float64:
         return np.complex128

@@ -18,8 +18,9 @@ from scipy.sparse import diags as sp_diags
 import sisl._array as _a
 from sisl._dispatch_class import _Dispatchs
 from sisl._dispatcher import AbstractDispatch, ClassDispatcher, TypeDispatcher
-from sisl._help import dtype_complex_to_real, wrap_filterwarnings
+from sisl._help import dtype_complex_to_float, wrap_filterwarnings
 from sisl._internal import set_module
+from sisl._lib._argparse import SislHelpFormatter
 from sisl.messages import deprecate_argument, deprecation
 from sisl.shape import Shape
 from sisl.utils import (
@@ -107,14 +108,14 @@ class Grid(
         "lattice",
         "argument sc has been deprecated in favor of lattice, please update your code.",
         "0.15",
-        "0.16",
+        "0.17",
     )
     @deprecate_argument(
         "bc",
         None,
         "argument bc has been deprecated (removed) in favor of the boundary conditions in Lattice, please update your code.",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def __init__(
         self,
@@ -147,7 +148,7 @@ class Grid(
     @deprecation(
         "Grid.set_bc is deprecated since boundary conditions are moved to Lattice (see github issue #626)",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def set_bc(self, bc):
         self.lattice.set_boundary_condition(bc)
@@ -155,7 +156,7 @@ class Grid(
     @deprecation(
         "Grid.set_boundary is deprecated since boundary conditions are moved to Lattice (see github issue #626)",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def set_boundary(self, bc):
         self.lattice.set_boundary_condition(bc)
@@ -163,7 +164,7 @@ class Grid(
     @deprecation(
         "Grid.set_boundary_condition is deprecated since boundary conditions are moved to Lattice (see github issue #626)",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def set_boundary_condition(self, bc):
         self.lattice.set_boundary_condition(bc)
@@ -876,7 +877,7 @@ class Grid(
 
     def __abs__(self):
         r"""Take the absolute value of the grid :math:`|\mathrm{grid}|`"""
-        dtype = dtype_complex_to_real(self.dtype)
+        dtype = dtype_complex_to_float(self.dtype)
         a = self.copy()
         a.grid = np.absolute(self.grid).astype(dtype, copy=False)
         return a
@@ -1184,7 +1185,7 @@ class Grid(
     @deprecation(
         "Grid.topyamg is deprecated in favor of Grid.to.pyamg",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def topyamg(self, dtype=None):
         r"""Create a `pyamg` stencil matrix to be used in pyamg
@@ -1709,7 +1710,7 @@ def sgrid(grid=None, argv=None, ret_grid=False):
     import sys
     from pathlib import Path
 
-    from sisl.io import BaseSile, get_sile
+    from sisl.io import BaseSile
 
     # The file *MUST* be the first argument
     # (except --help|-h)
@@ -1747,7 +1748,7 @@ This may be unexpected but enables one to do advanced manipulations.
 
     p = argparse.ArgumentParser(
         exe,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=SislHelpFormatter,
         description=description,
     )
 
@@ -1757,7 +1758,6 @@ This may be unexpected but enables one to do advanced manipulations.
     # First read the input "Sile"
     stdout_grid = True
     if grid is None:
-        from os.path import isfile
 
         argv, input_file = cmd.collect_input(argv)
 

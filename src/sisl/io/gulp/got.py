@@ -10,7 +10,7 @@ import numpy as np
 
 from sisl import Atom, Geometry, Lattice, Orbital, constant, units
 from sisl._internal import set_module
-from sisl.messages import deprecate_argument, deprecation, info, warn
+from sisl.messages import deprecation, info, warn
 from sisl.physics import DynamicalMatrix
 
 from .._help import parse_order
@@ -53,7 +53,7 @@ class gotSileGULP(SileGULP):
         self.set_key("lattice", key)
 
     set_supercell_key = deprecation(
-        "set_supercell_key is deprecated in favor of set_lattice_key", "0.15", "0.16"
+        "set_supercell_key is deprecated in favor of set_lattice_key", "0.15", "0.17"
     )(set_lattice_key)
 
     @sile_fh_open()

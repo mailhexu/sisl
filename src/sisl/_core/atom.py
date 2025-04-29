@@ -18,7 +18,6 @@ from sisl._indices import list_index_le
 from sisl._internal import set_module
 from sisl.messages import deprecate_argument, deprecation, info
 from sisl.shape import Sphere
-from sisl.typing import NDArray
 
 from .orbital import Orbital
 
@@ -957,15 +956,15 @@ class Atom(
 
     Parameters
     ----------
-    Z : int or str
+    Z :
         determine species for the atomic species.
     orbitals : list of Orbital or float, optional
         orbitals associated with this atom. See `Orbital` for details on
         how to define orbitals.
         Defaults to one orbital.
-    mass : float, optional
+    mass :
         the atomic mass, defaults to the mass found in `PeriodicTable`.
-    tag : str, optional
+    tag :
         arbitrary designation for user handling similar atoms with
         different settings (defaults to the label of the atom)
 
@@ -1044,7 +1043,7 @@ class Atom(
 
     def __init__(
         self,
-        Z,
+        Z: Union[str, int],
         orbitals=None,
         mass: Optional[float] = None,
         tag: Optional[str] = None,
@@ -1305,7 +1304,7 @@ class Atom(
         return vals
 
     @deprecation(
-        "toSphere is deprecated, use shape.to.Sphere(...) instead.", "0.15", "0.16"
+        "toSphere is deprecated, use shape.to.Sphere(...) instead.", "0.15", "0.17"
     )
     def toSphere(self, center=None):
         """Return a sphere with the maximum orbital radius equal
@@ -1421,14 +1420,14 @@ class Atoms:
 
     Parameters
     ----------
-    atoms : str, Atom, dict or list-like
+    atoms :
        atoms to be contained in this list of atoms
        If a str, or a single `Atom` it will be the only atom in the resulting
        class repeated `na` times.
        If a list, it will create all unique atoms and retain these, each item in
        the list may a single argument passed to the `Atom` or a dictionary
        that is passed to `Atom`, see examples.
-    na : int or None
+    na :
        total number of atoms, if ``len(atoms)`` is smaller than `na` it will
        be repeated to match `na`.
 
@@ -1522,7 +1521,7 @@ class Atoms:
         return self._atom
 
     @property
-    @deprecation("nspecie is deprecated, use nspecies instead.", "0.15", "0.16")
+    @deprecation("nspecie is deprecated, use nspecies instead.", "0.15", "0.17")
     def nspecie(self):
         """Number of different species"""
         return len(self._atom)
@@ -1538,16 +1537,16 @@ class Atoms:
         return self._species
 
     @property
-    @deprecation("specie is deprecated, use species instead.", "0.15", "0.16")
+    @deprecation("specie is deprecated, use species instead.", "0.15", "0.17")
     def specie(self):
         """List of atomic species"""
         return self._species
 
     @property
-    def no(self):
+    def no(self) -> int:
         """Total number of orbitals in this list of atoms"""
         uorbs = _a.arrayi([a.no for a in self.atom])
-        return uorbs[self.species].sum()
+        return int(uorbs[self.species].sum())
 
     @property
     def orbitals(self):
@@ -1624,7 +1623,7 @@ class Atoms:
         raise KeyError("Could not find `atom` in the list of atoms.")
 
     specie_index = deprecation(
-        "specie_index is deprecated, use species_index instead.", "0.15", "0.16"
+        "specie_index is deprecated, use species_index instead.", "0.15", "0.17"
     )(species_index)
 
     def group_atom_data(self, data, axis=0):
@@ -1659,7 +1658,7 @@ class Atoms:
         "inplace",
         "argument in_place has been deprecated in favor of inplace, please update your code.",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def reorder(self, inplace: bool = False):
         """Reorders the atoms and species index so that they are ascending (starting with a species that exists)
@@ -1734,7 +1733,7 @@ class Atoms:
         "inplace",
         "argument in_place has been deprecated in favor of inplace, please update your code.",
         "0.15",
-        "0.16",
+        "0.17",
     )
     def reduce(self, inplace: bool = False):
         """Returns a new `Atoms` object by removing non-used atoms"""

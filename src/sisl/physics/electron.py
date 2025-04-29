@@ -1,12 +1,6 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
-from __future__ import annotations
-
-from typing import Literal, Optional
-
-from sisl.messages import deprecate_argument
-
 r"""Electron related functions and classes
 ==========================================
 
@@ -22,8 +16,8 @@ One may also plot real-space wavefunctions.
    PDOS
    COP
    berry_phase
-   berry_curvature
-   conductivity
+   ahc
+   shc
    wavefunction
    spin_moment
    spin_contamination
@@ -48,17 +42,21 @@ automatically passes the correct ``S`` because it knows the states :math:`\mathb
    EigenstateElectron
 
 """
+from __future__ import annotations
 
+from collections.abc import Callable
 from functools import reduce
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import numpy as np
+import numpy.typing as npt
+import scipy.sparse as scs
 from numpy import (
     add,
     ceil,
     conj,
     cos,
     dot,
-    einsum,
     empty,
     exp,
     floor,
@@ -70,37 +68,56 @@ from numpy import (
     sort,
     zeros,
 )
-from scipy.sparse import csr_matrix, hstack, identity, issparse
+from scipy.sparse import csr_matrix, hstack, issparse
 
 import sisl._array as _a
 from sisl import BoundaryCondition as BC
-from sisl import Geometry, Grid, Lattice, constant, units
+from sisl import C, Geometry, Grid, Lattice
 from sisl._core.oplist import oplist
-from sisl._help import dtype_complex_to_real, dtype_real_to_complex
 from sisl._indices import indices_le
 from sisl._internal import set_module
 from sisl._math_small import xyz_to_spherical_cos_phi
 from sisl.linalg import det
 from sisl.linalg import eigvals as la_eigvals
 from sisl.linalg import sqrth, svd_destroy
-from sisl.messages import SislError, info, progressbar, warn
+from sisl.messages import (
+    SislError,
+    deprecate_argument,
+    deprecation,
+    info,
+    progressbar,
+    warn,
+)
+from sisl.physics._common import comply_projection
+from sisl.typing import (
+    CartesianAxisStrLiteral,
+    DistributionType,
+    ProjectionType,
+    ProjectionTypeDiag,
+    ProjectionTypeHadamard,
+    ProjectionTypeHadamardAtoms,
+)
+from sisl.utils.misc import direction
+
+if TYPE_CHECKING:
+    from .brillouinzone import BrillouinZone
 
 from .distribution import get_distribution
 from .sparse import SparseOrbitalBZSpin
 from .spin import Spin
-from .state import Coefficient, State, StateC, _FakeMatrix, degenerate_decouple
+from .state import Coefficient, State, StateC, _FakeMatrix
 
 __all__ = ["DOS", "PDOS", "COP"]
 __all__ += ["spin_moment", "spin_contamination"]
-__all__ += ["berry_phase", "berry_curvature"]
-__all__ += ["conductivity"]
+__all__ += ["berry_phase"]
+__all__ += ["ahc", "shc", "conductivity"]
 __all__ += ["wavefunction"]
 __all__ += ["CoefficientElectron", "StateElectron", "StateCElectron"]
 __all__ += ["EigenvalueElectron", "EigenvectorElectron", "EigenstateElectron"]
 
 
 @set_module("sisl.physics.electron")
-def DOS(E, eig, distribution="gaussian"):
+def DOS(E, eig, distribution: DistributionType = "gaussian"):
     r"""Calculate the density of states (DOS) for a set of energies, `E`, with a distribution function
 
     The :math:`\mathrm{DOS}(E)` is calculated as:
@@ -110,7 +127,7 @@ def DOS(E, eig, distribution="gaussian"):
 
     where :math:`D(\Delta E)` is the distribution function used. Note that the distribution function
     used may be a user-defined function. Alternatively a distribution function may
-    be retrieved from `~sisl.physics.distribution`.
+    be retrieved from :ref:`physics.distribution`.
 
     Parameters
     ----------
@@ -118,13 +135,13 @@ def DOS(E, eig, distribution="gaussian"):
        energies to calculate the DOS at
     eig : array_like
        electronic eigenvalues
-    distribution : func or str, optional
+    distribution :
        a function that accepts :math:`\Delta E` as argument and calculates the
        distribution function.
 
     See Also
     --------
-    sisl.physics.distribution : a selected set of implemented distribution functions
+    :ref:`physics.distribution` : a selected set of implemented distribution functions
     COP : calculate COOP or COHP curves
     PDOS : projected DOS (same as this, but projected onto each orbital)
     spin_moment : spin moment
@@ -141,7 +158,7 @@ def DOS(E, eig, distribution="gaussian"):
 
 
 @set_module("sisl.physics.electron")
-def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
+def PDOS(E, eig, state, S=None, distribution: DistributionType = "gaussian", spin=None):
     r""" Calculate the projected density of states (PDOS) for a set of energies, `E`, with a distribution function
 
     The :math:`\mathrm{PDOS}(E)` is calculated as:
@@ -151,7 +168,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
 
     where :math:`D(\Delta E)` is the distribution function used. Note that the distribution function
     used may be a user-defined function. Alternatively a distribution function may
-    be aquired from `~sisl.physics.distribution`.
+    be acquired from :ref:`physics.distribution`.
 
     In case of an orthogonal basis set :math:`\mathbf S` is equal to the identity matrix.
     Note that `DOS` is the sum of the orbital projected DOS:
@@ -194,7 +211,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
        overlap matrix used in the :math:`\langle\psi|\mathbf S|\psi\rangle` calculation. If `None` the identity
        matrix is assumed. For non-colinear calculations this matrix may be halve the size of ``len(state[0, :])`` to
        trigger the non-colinear calculation of PDOS.
-    distribution : func or str, optional
+    distribution :
        a function that accepts :math:`E-\epsilon` as argument and calculates the
        distribution function.
     spin : str or Spin, optional
@@ -203,7 +220,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
 
     See Also
     --------
-    sisl.physics.distribution : a selected set of implemented distribution functions
+    :ref:`physics.distribution` : a selected set of implemented distribution functions
     DOS : total DOS (same as summing over orbitals)
     COP : calculate COOP or COHP curves
     spin_moment : spin moment
@@ -215,30 +232,80 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
         projected DOS calculated at energies, has dimension ``(1, state.shape[1], len(E))``.
         For non-colinear calculations it will be ``(4, state.shape[1] // 2, len(E))``, ordered as
         indicated in the above list.
+        For Nambu calculations it will be ``(8, state.shape[1] // 4, len(E))``.
     """
     if isinstance(distribution, str):
         distribution = get_distribution(distribution)
 
     # Figure out whether we are dealing with a non-colinear calculation
     if S is None:
-
-        class S:
-            __slots__ = []
-            shape = (state.shape[1], state.shape[1])
-
-            @staticmethod
-            def dot(v):
-                return v
+        S = _FakeMatrix(state.shape[1])
 
     if spin is None:
         if S.shape[1] == state.shape[1] // 2:
             spin = Spin("nc")
             S = S[::2, ::2]
+        elif S.shape[1] == state.shape[1] // 4:
+            spin = Spin("nambu")
+            S = S[::4, ::4]
         else:
             spin = Spin()
 
     # check for non-colinear (or SO)
-    if spin.kind > Spin.POLARIZED:
+    if spin.kind > Spin.SPINORBIT:
+        # Non colinear eigenvectors
+        if S.shape[1] == state.shape[1]:
+            # Since we are going to reshape the eigen-vectors
+            # to more easily get the mixed states, we can reduce the overlap matrix
+            S = S[::4, ::4]
+
+        # Initialize data
+        PDOS = empty([8, state.shape[1] // 4, len(E)], dtype=state.real.dtype)
+
+        # Do spin-box calculations:
+        #  PDOS[:4] = electron
+        #  PDOS[0] = total DOS (diagonal)
+        #  PDOS[1] = x == < psi | \sigma_x S | psi >
+        #  PDOS[2] = y == < psi | \sigma_y S | psi >
+        #  PDOS[3] = z == < psi | \sigma_z S | psi >
+        #  PDOS[4:] = hole
+
+        d = distribution(E - eig[0]).reshape(1, -1)
+        cs = conj(state[0]).reshape(-1, 4)
+        v = S @ state[0].reshape(-1, 4)
+        D1 = (cs * v).real  # uu,dd PDOS
+        PDOS[0, :, :] = D1[..., [0, 1]].sum(1).reshape(-1, 1) * d  # total DOS
+        PDOS[3, :, :] = (D1[:, 0] - D1[:, 1]).reshape(-1, 1) * d  # z-dos
+        PDOS[4, :, :] = D1[..., [2, 3]].sum(1).reshape(-1, 1) * d  # total DOS
+        PDOS[7, :, :] = (D1[:, 2] - D1[:, 3]).reshape(-1, 1) * d  # z-dos
+        D1 = (cs[:, 1] * v[:, 0]).reshape(-1, 1)  # d,u
+        D2 = (cs[:, 0] * v[:, 1]).reshape(-1, 1)  # u,d
+        PDOS[1, :, :] = (D1.real + D2.real) * d  # x-dos
+        PDOS[2, :, :] = (D2.imag - D1.imag) * d  # y-dos
+        D1 = (cs[:, 3] * v[:, 2]).reshape(-1, 1)  # d,u
+        D2 = (cs[:, 2] * v[:, 3]).reshape(-1, 1)  # u,d
+        PDOS[5, :, :] = (D1.real + D2.real) * d  # x-dos
+        PDOS[6, :, :] = (D2.imag - D1.imag) * d  # y-dos
+        for i in range(1, len(eig)):
+            d = distribution(E - eig[i]).reshape(1, -1)
+            cs = conj(state[i]).reshape(-1, 4)
+            v = S @ state[i].reshape(-1, 4)
+            D1 = (cs * v).real
+            PDOS[0, :, :] += D1[..., [0, 1]].sum(1).reshape(-1, 1) * d  # total DOS
+            PDOS[3, :, :] += (D1[:, 0] - D1[:, 1]).reshape(-1, 1) * d  # z-dos
+            PDOS[4, :, :] += D1[..., [2, 3]].sum(1).reshape(-1, 1) * d  # total DOS
+            PDOS[7, :, :] += (D1[:, 2] - D1[:, 3]).reshape(-1, 1) * d  # z-dos
+            D1 = (cs[:, 1] * v[:, 0]).reshape(-1, 1)  # d,u
+            D2 = (cs[:, 0] * v[:, 1]).reshape(-1, 1)  # u,d
+            PDOS[1, :, :] += (D1.real + D2.real) * d  # x-dos
+            PDOS[2, :, :] += (D2.imag - D1.imag) * d  # y-dos
+            D1 = (cs[:, 3] * v[:, 2]).reshape(-1, 1)  # d,u
+            D2 = (cs[:, 2] * v[:, 3]).reshape(-1, 1)  # u,d
+            PDOS[5, :, :] += (D1.real + D2.real) * d  # x-dos
+            PDOS[6, :, :] += (D2.imag - D1.imag) * d  # y-dos
+
+    elif spin.kind > Spin.POLARIZED:
+        # check for non-colinear (or SO)
         # Non colinear eigenvectors
         if S.shape[1] == state.shape[1]:
             # Since we are going to reshape the eigen-vectors
@@ -246,9 +313,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
             S = S[::2, ::2]
 
         # Initialize data
-        PDOS = empty(
-            [4, state.shape[1] // 2, len(E)], dtype=dtype_complex_to_real(state.dtype)
-        )
+        PDOS = empty([4, state.shape[1] // 2, len(E)], dtype=state.real.dtype)
 
         # Do spin-box calculations:
         #  PDOS[0] = total DOS (diagonal)
@@ -258,7 +323,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
 
         d = distribution(E - eig[0]).reshape(1, -1)
         cs = conj(state[0]).reshape(-1, 2)
-        v = S.dot(state[0].reshape(-1, 2))
+        v = S @ state[0].reshape(-1, 2)
         D1 = (cs * v).real  # uu,dd PDOS
         PDOS[0, :, :] = D1.sum(1).reshape(-1, 1) * d  # total DOS
         PDOS[3, :, :] = (D1[:, 0] - D1[:, 1]).reshape(-1, 1) * d  # z-dos
@@ -269,7 +334,7 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
         for i in range(1, len(eig)):
             d = distribution(E - eig[i]).reshape(1, -1)
             cs = conj(state[i]).reshape(-1, 2)
-            v = S.dot(state[i].reshape(-1, 2))
+            v = S @ state[i].reshape(-1, 2)
             D1 = (cs * v).real
             PDOS[0, :, :] += D1.sum(1).reshape(-1, 1) * d
             PDOS[3, :, :] += (D1[:, 0] - D1[:, 1]).reshape(-1, 1) * d
@@ -279,12 +344,12 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
             PDOS[2, :, :] += (D2.imag - D1.imag) * d
 
     else:
-        PDOS = (conj(state[0]) * S.dot(state[0])).real.reshape(-1, 1) * distribution(
+        PDOS = (conj(state[0]) * (S @ state[0])).real.reshape(-1, 1) * distribution(
             E - eig[0]
         ).reshape(1, -1)
 
         for i in range(1, len(eig)):
-            PDOS += (conj(state[i]) * S.dot(state[i])).real.reshape(
+            PDOS += (conj(state[i]) * (S @ state[i])).real.reshape(
                 -1, 1
             ) * distribution(E - eig[i]).reshape(1, -1)
         PDOS.shape = (1, *PDOS.shape)
@@ -298,9 +363,11 @@ def PDOS(E, eig, state, S=None, distribution="gaussian", spin=None):
     "atol",
     "argument tol has been deprecated in favor of atol, please update your code.",
     "0.15",
-    "0.16",
+    "0.17",
 )
-def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
+def COP(
+    E, eig, state, M, distribution: DistributionType = "gaussian", atol: float = 1e-10
+):
     r"""Calculate the Crystal Orbital Population for a set of energies, `E`, with a distribution function
 
     The :math:`\mathrm{COP}(E)` is calculated as:
@@ -310,7 +377,7 @@ def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
 
     where :math:`D(\Delta E)` is the distribution function used. Note that the distribution function
     used may be a user-defined function. Alternatively a distribution function may
-    be aquired from `~sisl.physics.distribution`.
+    be acquired from :ref:`physics.distribution`.
 
     The COP curves generally refers to COOP or COHP curves.
     COOP is the Crystal Orbital Overlap Population with `M` being the overlap matrix.
@@ -326,10 +393,10 @@ def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
        eigenvectors
     M : array_like
        matrix used in the COP curve.
-    distribution : func or str, optional
+    distribution :
        a function that accepts :math:`E-\epsilon` as argument and calculates the
        distribution function.
-    atol : float, optional
+    atol :
        tolerance value where the distribution should be above before
        considering an eigenstate to contribute to an energy point,
        a higher value means that more energy points are discarded and so the calculation
@@ -344,7 +411,7 @@ def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
 
     See Also
     --------
-    sisl.physics.distribution : a selected set of implemented distribution functions
+    :ref:`physics.distribution` : a selected set of implemented distribution functions
     DOS : total DOS
     PDOS : projected DOS over all orbitals
     spin_moment : spin moment
@@ -362,7 +429,7 @@ def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
     ), "COP: number of eigenvalues and states are not consistent"
 
     # get default dtype
-    dtype = dtype_complex_to_real(state.dtype)
+    dtype = state.real.dtype
 
     # initialize the COP values
     no = M.shape[0]
@@ -437,7 +504,20 @@ def COP(E, eig, state, M, distribution="gaussian", atol: float = 1e-10):
 
 
 @set_module("sisl.physics.electron")
-def spin_moment(state, S=None, project: bool = False):
+@deprecate_argument(
+    "project",
+    "projection",
+    "argument project has been deprecated in favor of projection",
+    "0.15",
+    "0.17",
+)
+def spin_moment(
+    state,
+    S=None,
+    projection: Union[
+        ProjectionTypeTrace, ProjectionTypeDiag, ProjectionTypeHadamard, True, False
+    ] = "diagonal",
+):
     r""" Spin magnetic moment (spin texture) and optionally orbitally resolved moments
 
     This calculation only makes sense for non-colinear calculations.
@@ -458,7 +538,7 @@ def spin_moment(state, S=None, project: bool = False):
        \\
        \mathbf{S}_\alpha^z &= \langle \psi_\alpha | \boldsymbol\sigma_z \mathbf S | \psi_\alpha \rangle
 
-    If `project` is true, the above will be the orbitally resolved quantities.
+    If `projection` is orbitals/basis/true, the above will be the orbitally resolved quantities.
 
     Parameters
     ----------
@@ -468,8 +548,8 @@ def spin_moment(state, S=None, project: bool = False):
        overlap matrix used in the :math:`\langle\psi|\mathbf S|\psi\rangle` calculation. If `None` the identity
        matrix is assumed. The overlap matrix should correspond to the system and :math:`\mathbf k` point the eigenvectors
        has been evaluated at.
-    project: bool, optional
-       whether the spin-moments will be orbitally resolved or not
+    projection:
+       how the projection should be done
 
     Notes
     -----
@@ -485,35 +565,33 @@ def spin_moment(state, S=None, project: bool = False):
     Returns
     -------
     numpy.ndarray
-        spin moments per state with final dimension ``(3, state.shape[0])``, or ``(3, state.shape[0], state.shape[1]//2)`` if project is true
+        spin moments per state with final dimension ``(3, state.shape[0])``, or ``(3,
+        state.shape[0], state.shape[1]//2)`` if projection is orbitals/basis/true
     """
     if state.ndim == 1:
-        return spin_moment(state.reshape(1, -1), S, project)[0]
+        return spin_moment(state.reshape(1, -1), S, projection)[0]
+
+    if isinstance(projection, bool):
+        projection = "hadamard" if projection else "diagonal"
+    projection = comply_projection(projection)
 
     if S is None:
-
-        class S:
-            __slots__ = []
-            shape = (state.shape[1] // 2, state.shape[1] // 2)
-
-            @staticmethod
-            def dot(v):
-                return v
+        S = _FakeMatrix(state.shape[1] // 2, state.shape[1] // 2)
 
     if S.shape[1] == state.shape[1]:
         S = S[::2, ::2]
 
     # see PDOS for details related to the spin-box calculations
 
-    if project:
+    if projection == "hadamard":
         s = empty(
             [3, state.shape[0], state.shape[1] // 2],
-            dtype=dtype_complex_to_real(state.dtype),
+            dtype=state.real.dtype,
         )
 
         for i in range(len(state)):
             cs = conj(state[i]).reshape(-1, 2)
-            Sstate = S.dot(state[i].reshape(-1, 2))
+            Sstate = S @ state[i].reshape(-1, 2)
             D1 = (cs * Sstate).real
             s[2, i] = D1[:, 0] - D1[:, 1]
             D1 = cs[:, 1] * Sstate[:, 0]
@@ -521,8 +599,8 @@ def spin_moment(state, S=None, project: bool = False):
             s[0, i] = D1.real + D2.real
             s[1, i] = D2.imag - D1.imag
 
-    else:
-        s = empty([3, state.shape[0]], dtype=dtype_complex_to_real(state.dtype))
+    elif projection == "diagonal":
+        s = empty([3, state.shape[0]], dtype=state.real.dtype)
 
         # TODO consider doing this all in a few lines
         # TODO Since there are no energy dependencies here we can actually do all
@@ -530,17 +608,31 @@ def spin_moment(state, S=None, project: bool = False):
         # TODO but also way more memory demanding!
         for i in range(len(state)):
             cs = conj(state[i]).reshape(-1, 2)
-            Sstate = S.dot(state[i].reshape(-1, 2))
+            Sstate = S @ state[i].reshape(-1, 2)
             D = cs.T @ Sstate
             s[2, i] = D[0, 0].real - D[1, 1].real
             s[0, i] = D[1, 0].real + D[0, 1].real
             s[1, i] = D[0, 1].imag - D[1, 0].imag
 
+    elif projection == "trace":
+        s = empty([3], dtype=state.real.dtype)
+
+        for i in range(len(state)):
+            cs = conj(state[i]).reshape(-1, 2)
+            Sstate = S @ state[i].reshape(-1, 2)
+            D = cs.T @ Sstate
+            s[2] = (D[0, 0].real - D[1, 1].real).sum()
+            s[0] = (D[1, 0].real + D[0, 1].real).sum()
+            s[1] = (D[0, 1].imag - D[1, 0].imag).sum()
+
+    else:
+        raise ValueError(f"spin_moment got wrong 'projection' argument: {projection}.")
+
     return s
 
 
 @set_module("sisl.physics.electron")
-def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True):
+def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True) -> oplist:
     r""" Calculate the spin contamination value between two spin states
 
     This calculation only makes sense for spin-polarized calculations.
@@ -566,9 +658,9 @@ def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True):
        overlap matrix used in the :math:`\langle\psi|\mathbf S|\psi\rangle` calculation. If `None` the identity
        matrix is assumed. The overlap matrix should correspond to the system and :math:`\mathbf k` point the eigenvectors
        have been evaluated at.
-    sum:
+    sum :
         whether the spin-contamination should be summed for all states (a single number returned).
-        If false, a spin-contamination per state per spin-channel will be returned.
+        If sum, a spin-contamination per state per spin-channel will be returned.
 
     Notes
     -----
@@ -576,9 +668,9 @@ def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True):
 
     Returns
     -------
-    ~sisl._core.oplist
+    ~sisl.oplist :
          spin squared expectation value per spin channel :math:`\alpha` and :math:`\beta`.
-         If `sum` is true, only a single number is returned (not an `~sisl._core.oplist`, otherwise a list for each
+         If `sum` is true, only a single number is returned (not a `~sisl.oplist`, otherwise a list for each
          state.
     """
     if state_alpha.ndim == 1:
@@ -603,7 +695,7 @@ def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True):
     if S is None:
         S_state_beta = state_beta.T
     else:
-        S_state_beta = S.dot(state_beta.T)
+        S_state_beta = S @ state_beta.T
 
     if sum:
 
@@ -616,7 +708,7 @@ def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True):
 
     else:
 
-        Sa = empty([n_alpha], dtype=dtype_complex_to_real(state_alpha.dtype))
+        Sa = empty([n_alpha], dtype=state_alpha.real.dtype)
         Sb = zeros([n_beta], dtype=Sa.dtype)
 
         # Loop alpha...
@@ -631,192 +723,26 @@ def spin_contamination(state_alpha, state_beta, S=None, sum: bool = True):
 
 # dHk is in [Ang eV]
 # velocity units in [Ang/ps]
-_velocity_const = 1 / constant.hbar("eV ps")
+_velocity_const = 1 / C.hbar("eV ps")
 
-
-def _velocity_matrix_non_ortho(
-    state, dHk, energy, dSk, degenerate, degenerate_dir, dtype
-):
-    r"""For states in a non-orthogonal basis"""
-
-    # All matrix elements along the 3 directions
-    n = state.shape[0]
-    v = empty([3, n, n], dtype=dtype)
-
-    # Decouple the degenerate states
-    if not degenerate is None:
-        degenerate_dir = _a.asarrayd(degenerate_dir)
-        degenerate_dir /= (degenerate_dir**2).sum() ** 0.5
-        deg_dHk = sum(d * dh for d, dh in zip(degenerate_dir, dHk))
-        for deg in degenerate:
-            # Set the average energy
-            e = np.average(energy[deg])
-            energy[deg] = e
-
-            # Now diagonalize to find the contributions from individual states
-            # then re-construct the seperated degenerate states
-            # Since we do this for all directions we should decouple them all
-            state[deg] = degenerate_decouple(
-                state[deg],
-                deg_dHk - sum(d * e * ds for d, ds in zip(degenerate_dir, dSk)),
-            )
-        del deg_dHk
-
-    # Since they depend on the state energies and dSk we have to loop them individually.
-    cs = conj(state)
-    for s, e in enumerate(energy):
-        # Since dHk *may* be a csr_matrix or sparse, we have to do it like
-        # this. A sparse matrix cannot be re-shaped with an extra dimension.
-        v[0, s] = cs @ (dHk[0] - e * dSk[0]).dot(state[s])
-        v[1, s] = cs @ (dHk[1] - e * dSk[1]).dot(state[s])
-        v[2, s] = cs @ (dHk[2] - e * dSk[2]).dot(state[s])
-
-    v *= _velocity_const
-    return v
-
-
-def _velocity_matrix_ortho(state, dHk, degenerate, degenerate_dir, dtype):
-    r"""For states in an orthogonal basis"""
-
-    # All matrix elements along the 3 directions
-    n = state.shape[0]
-    v = empty([3, n, n], dtype=dtype)
-
-    # Decouple the degenerate states
-    if not degenerate is None:
-        degenerate_dir = _a.asarrayd(degenerate_dir)
-        degenerate_dir /= (degenerate_dir**2).sum() ** 0.5
-        deg_dHk = sum(d * dh for d, dh in zip(degenerate_dir, dHk))
-        for deg in degenerate:
-            # Now diagonalize to find the contributions from individual states
-            # then re-construct the seperated degenerate states
-            # Since we do this for all directions we should decouple them all
-            state[deg] = degenerate_decouple(state[deg], deg_dHk)
-        del deg_dHk
-
-    cs = conj(state)
-    for s in range(n):
-        v[0, s] = cs @ dHk[0].dot(state[s])
-        v[1, s] = cs @ dHk[1].dot(state[s])
-        v[2, s] = cs @ dHk[2].dot(state[s])
-
-    v *= _velocity_const
-    return v
+# With G0 = 2e^2 / h = e^2 / (\hbar \pi)
+# AHC is
+#   \propto e^2/\hbar = G0 \pi
+# This converts \sigma into S
+_ahc_const = C.G0 * np.pi
 
 
 @set_module("sisl.physics.electron")
-def berry_curvature(
-    state, energy, dHk, dSk=None, degenerate=None, degenerate_dir=(1, 1, 1)
-):
-    r"""Calculate the Berry curvature matrix for a set of states (using Kubo)
-
-    The Berry curvature is calculated using the following expression
-    (:math:`\alpha`, :math:`\beta` corresponding to Cartesian directions):
-
-    .. math::
-
-       \boldsymbol\Omega_{\alpha\beta,i} = - \frac2{\hbar^2}\Im\sum_{j\neq i}
-                \frac{v^\alpha_{ij} v^\beta_{ji}}
-                     {[\epsilon_j - \epsilon_i]^2}
-
-    For details see Eq. (11) in :cite:`Wang2006` or Eq. (2.59) in :cite:`TopInvCourse`.
-
-    Parameters
-    ----------
-    state : array_like
-       vectors describing the electronic states, 2nd dimension contains the states. In case of degenerate
-       states the vectors *may* be rotated upon return.
-    energy : array_like, optional
-       energies of the states. In case of degenerate
-       states the eigenvalues of the states will be averaged in the degenerate sub-space.
-    dHk : list of array_like
-       Hamiltonian derivative with respect to :math:`\mathbf k`. This needs to be a tuple or
-       list of the Hamiltonian derivative along the 3 Cartesian directions.
-    dSk : list of array_like, optional
-       :math:`\delta \mathbf S_{\mathbf k}` matrix required for non-orthogonal basis.
-       Same derivative as `dHk`.
-       NOTE: Using non-orthogonal basis sets are not tested.
-    degenerate : list of array_like, optional
-       a list containing the indices of degenerate states. In that case a prior diagonalization
-       is required to decouple them.
-    degenerate_dir : (3,), optional
-       along which direction degenerate states are decoupled.
-
-    See Also
-    --------
-    velocity : calculate state velocities
-    velocity_matrix : calculate state velocities between all states
-    Hamiltonian.dHk : function for generating the Hamiltonian derivatives (`dHk` argument)
-    Hamiltonian.dSk : function for generating the Hamiltonian derivatives (`dSk` argument)
-
-    Returns
-    -------
-    numpy.ndarray
-        Berry flux with final dimension ``(3, 3, state.shape[0])``
-    """
-    if state.ndim == 1:
-        return berry_curvature(
-            state.reshape(1, -1), energy, dHk, dSk, degenerate, degenerate_dir
-        )[0]
-
-    # cast dtypes to *any* complex valued data-type that can be expressed
-    # minimally by a complex64 object
-    dtype = np.result_type(state.dtype, dHk[0].dtype, np.complex64)
-
-    if dSk is None:
-        v_matrix = _velocity_matrix_ortho(state, dHk, degenerate, degenerate_dir, dtype)
-    else:
-        v_matrix = _velocity_matrix_non_ortho(
-            state, dHk, energy, dSk, degenerate, degenerate_dir, dtype
-        )
-        warn(
-            "berry_curvature calculation for non-orthogonal basis sets are not tested! Do not expect this to be correct!"
-        )
-    return _berry_curvature(v_matrix, energy)
-
-
-# This reverses the velocity unit (squared since Berry curvature is v.v)
-_berry_curvature_const = 1 / _velocity_const**2
-
-
-def _berry_curvature(v_M, energy):
-    r"""Calculate Berry curvature for a given velocity matrix"""
-
-    # All matrix elements along the 3 directions
-    N = v_M.shape[1]
-    # For cases where all states are degenerate then we would not be able
-    # to calculate anything. Hence we need to initialize as zero
-    #   \Omega_{\alpha \beta, n}
-    sigma = zeros([3, 3, N], dtype=dtype_complex_to_real(v_M.dtype))
-
-    for s, e in enumerate(energy):
-        de = (energy - e) ** 2
-        # add factor 2 here, but omit the minus sign until later
-        # where we are forced to use the constant upon return anyways
-        np.divide(2, de, where=(de != 0), out=de)
-
-        # Calculate the berry-curvature
-        sigma[:, :, s] = ((de * v_M[:, s]) @ v_M[:, :, s].T).imag
-
-    # negative here
-    sigma *= -_berry_curvature_const
-    return sigma
-
-
-@set_module("sisl.physics.electron")
-def conductivity(
-    bz,
-    distribution="fermi-dirac",
-    method="ahc",
-    degenerate=1.0e-5,
-    degenerate_dir=(1, 1, 1),
+def ahc(
+    bz: BrillouinZone,
+    k_average: bool = True,
     *,
-    eigenstate_kwargs=None,
-):
-    r"""Electronic conductivity for a given `BrillouinZone` integral
-
-    Currently the *only* implemented method is the anomalous Hall conductivity (AHC, see :cite:`Wang2006`)
-    which may be calculated as:
+    distribution: DistributionType = "step",
+    eigenstate_kwargs={},
+    apply_kwargs={},
+    **berry_kwargs,
+) -> np.ndarray:
+    r"""Electronic anomalous Hall conductivity for a given `BrillouinZone` integral
 
     .. math::
        \sigma_{\alpha\beta} = \frac{-e^2}{\hbar}\int\,\mathrm d\mathbf k\sum_i f_i\Omega_{i,\alpha\beta}(\mathbf k)
@@ -824,93 +750,371 @@ def conductivity(
     where :math:`\Omega_{i,\alpha\beta}` and :math:`f_i` is the Berry curvature and occupation
     for state :math:`i`.
 
-    The conductivity will be averaged by the Brillouin zone volume of the parent. See `BrillouinZone.volume` for details.
-    Hence for 1D the returned unit will be S/Ang, 2D it will be S/Ang^2 and 3D it will be S/Ang^3.
+    The conductivity will be averaged by volume of the periodic unit cell.
+    Hence the unit of `ahc` depends on the periodic unit cell.
+    See `~sisl.Lattice.volumef` for details.
+
+    See :cite:`Wang2006` for details on the implementation.
 
     Parameters
     ----------
-    bz : BrillouinZone
+    bz :
         containing the integration grid and has the ``bz.parent`` as an instance of Hamiltonian.
-    distribution : str or func, optional
-        distribution used to find occupations
-    method : {"ahc"}
-       "ahc" calculates the dc anomalous Hall conductivity
-    degenerate : float, optional
-       de-couple degenerate states within the given tolerance (in eV)
-    degenerate_dir : (3,), optional
-       along which direction degenerate states are decoupled.
-    eigenstate_kwargs : dict, optional
+    k_average :
+        if `True`, the returned quantity is averaged over `bz`, else all k-point
+        contributions will be collected (in the 1st dimension).
+        Note, for large `bz` integrations this may explode the memory usage.
+    distribution :
+        An optional distribution enabling one to automatically sum states
+        across occupied/unoccupied states.
+    eigenstate_kwargs :
        keyword arguments passed directly to the ``contour.eigenstate`` method.
        One should *not* pass a ``k`` or a ``wrap`` keyword argument as they are
        already used.
+    apply_kwargs :
+       keyword arguments passed directly to ``bz.apply.renew(**apply_kwargs)``.
+    **berry_kwargs :
+        arguments passed directly to the `berry_curvature` method.
 
-    Returns
-    -------
-    cond : float
-        conductivity in units [S/cm^D]. The D is the dimensionality of the system.
+        Here one can pass `derivative_kwargs` to pass flags to the
+        `derivative` method. In particular ``axes`` can be used
+        to speedup the calculation (by omitting certain directions).
+
+    Examples
+    --------
+
+    To calculate the AHC for a range of energy-points.
+    First create ``E`` which is the energy grid.
+    In order for the internal algorithm to be able
+    to broadcast arrays correctly, we have to allow the eigenvalue
+    spectrum to be appended by reshaping.
+
+    >>> E = np.linspace(-2, 2, 51)
+    >>> dist = get_distribution("step", x0=E.reshape(-1, 1))
+    >>> ahc_cond = ahc(bz, dist)
+    >>> assert ahc_cond.shape == (3, 3, len(E))
+
+    Sometimes one wishes to see the k-resolved AHC.
+    Be aware that AHC requires a dense k-grid, and hence it might
+    require a lot of memory.
+    Here it is calculated at :math:`E=0` (default energy reference).
+
+    >>> ahc_cond = ahc(bz, k_average=False)
+    >>> assert ahc_cond.shape == (len(bz), 3, 3)
 
     See Also
     --------
-    berry_curvature: method used to calculate the Berry-flux for calculating the conductivity
-    BrillouinZone.volume: volume calculation of the Brillouin zone
+    ~sisl.physics.derivative: method for calculating the exact derivatives
+    ~sisl.physics.berry_curvature: method used to calculate the Berry curvature for calculating the conductivity
+    ~sisl.Lattice.volumef: volume calculation of the lattice
+    shc: spin Hall conductivity
+
+    Returns
+    -------
+    ahc:
+        Anomalous Hall conductivity returned in certain dimensions ``ahc[:, :]``.
+        If `sum` is False, it will be at least a 3D array with the 3rd dimension
+        having the contribution from state `i`.
+        If `k_average` is False, it will have a dimension prepended with
+        k-point resolved AHC.
+        If one passes `axes` to the `derivative_kwargs` argument one will get
+        dimensions according to the number of axes requested, by default all
+        axes will be used (even if they are non-periodic).
+        The dtype will be imaginary.
+        When :math:`D` is the dimensionality of the system we find the unit to be
+        :math:`\mathrm S/\mathrm{Ang}^{D-2}`.
     """
     from .hamiltonian import Hamiltonian
 
+    H = bz.parent
+
     # Currently we require the conductivity calculation to *only* accept Hamiltonians
-    if not isinstance(bz.parent, Hamiltonian):
+    if not isinstance(H, Hamiltonian):
         raise SislError(
-            "conductivity: requires the Brillouin zone object to contain a Hamiltonian!"
+            "ahc: requires the Brillouin zone object to contain a Hamiltonian!"
         )
 
     if isinstance(distribution, str):
         distribution = get_distribution(distribution)
 
-    if eigenstate_kwargs is None:
-        eigenstate_kwargs = {}
+    def _ahc(es, k, weight, parent):
+        # the latter arguments are merely for speeding up the procedure
+        nonlocal berry_kwargs, distribution
+        return es.berry_curvature(**berry_kwargs, distribution=distribution)
 
-    method = method.lower()
-    if method == "ahc":
-
-        def _ahc(es):
-            occ = distribution(es.eig)
-            bc = es.berry_curvature(
-                degenerate=degenerate, degenerate_dir=degenerate_dir
-            )
-            return bc @ occ
-
-        vol, dim = bz.volume(ret_dim=True)
-
-        if dim == 0:
-            raise SislError(
-                f"conductivity: found a dimensionality of 0 which is non-physical"
-            )
-
-        cond = bz.apply.average.eigenstate(**eigenstate_kwargs, wrap=_ahc) * (
-            -constant.G0 / (4 * np.pi)
-        )
-
-        # Convert the dimensions from S/m^D to S/cm^D
-        cond /= vol * units(f"Ang^{dim}", f"cm^{dim}")
-        warn(
-            "conductivity: be aware that the units are currently not tested, please provide feedback!"
-        )
-
+    apply = bz.apply.renew(**apply_kwargs)
+    if k_average:
+        apply = apply.average
     else:
-        raise SislError("conductivity: requires the method to be [ahc]")
+        apply = apply.ndarray
+    cond = apply.eigenstate(**eigenstate_kwargs, wrap=_ahc)
+
+    lat = H.geometry.lattice
+    per_axes = lat.pbc.nonzero()[0]
+    vol = lat.volumef(per_axes)
+
+    # Convert to S / Ang
+    cond *= -_ahc_const / vol
+
+    return cond
+
+
+def _create_sigma(n, sigma, dtype, format):
+    r"""This will return the Pauli matrix filled in a diagonal of the matrix
+
+    It will not return the spin operator, which has the pre-factor \hbar/2
+
+    """
+    if isinstance(sigma, str):
+        sigma = getattr(Spin, sigma.upper()) / 2
+    else:
+        # it must be an ndarray
+        sigma = np.asarray(sigma)
+        assert sigma.ndim == 2
+        if len(sigma) == 2:
+            # only the spin-box
+            sigma = sigma / 2
+        elif len(sigma) == n * 2:
+            # full sigma
+            sigma = sigma / 2
+            return sigma
+
+    if format in ("array", "matrix"):
+        m = np.zeros([n, 2, n, 2], dtype=dtype)
+        idx = np.arange(n)
+        m[idx, 0, idx, 0] = sigma[0, 0]
+        m[idx, 0, idx, 1] = sigma[0, 1]
+        m[idx, 1, idx, 0] = sigma[1, 0]
+        m[idx, 1, idx, 1] = sigma[1, 1]
+        m.shape = (n * 2, n * 2)
+    else:
+        m = scs.kron(scs.eye(n, dtype=dtype), sigma).tocsr()
+    return m
+
+
+@set_module("sisl.physics.electron")
+def shc(
+    bz: BrillouinZone,
+    k_average: bool = True,
+    sigma: Union[CartesianAxisStrLiteral, npt.ArrayLike] = "z",
+    *,
+    J_axes: Union[CartesianAxisStrLiteral, Sequence[CartesianAxisStrLiteral]] = "xyz",
+    distribution: DistributionType = "step",
+    eigenstate_kwargs={},
+    apply_kwargs={},
+    **berry_kwargs,
+) -> np.ndarray:
+    r"""Electronic spin Hall conductivity for a given `BrillouinZone` integral
+
+    .. math::
+       \sigma^\gamma_{\alpha\beta} = \frac{-e^2}{\hbar}\int\,\mathrm d\mathbf k
+       \sum_i f_i\boldsymbol\Omega^\gamma_{i,\alpha\beta}(\mathbf k)
+
+    where :math:`\boldsymbol\Omega^\gamma_{i,\alpha\beta}` and :math:`f_i` are the
+    spin Berry curvature and occupation for state :math:`i`.
+
+    The conductivity will be averaged by volume of the periodic unit cell.
+    See `~sisl.Lattice.volumef` for details.
+
+    See :cite:`PhysRevB.98.214402` and :cite:`Ji2022` for details on the implementation.
+
+    Parameters
+    ----------
+    bz :
+        containing the integration grid and has the ``bz.parent`` as an instance of Hamiltonian.
+    k_average:
+        if `True`, the returned quantity is averaged over `bz`, else all k-point
+        contributions will be collected.
+        Note, for large `bz` integrations this may explode the memory usage.
+    sigma:
+        which Pauli matrix is used, alternatively one can pass a custom spin matrix,
+        or the full sigma.
+    J_axes:
+        the direction(s) where the :math:`J` operator will be applied (defaults to all).
+    distribution :
+        An optional distribution enabling one to automatically sum states
+        across occupied/unoccupied states.
+        Defaults to the step function.
+    eigenstate_kwargs :
+       keyword arguments passed directly to the ``bz.eigenstate`` method.
+       One should *not* pass a ``k`` or a ``wrap`` keyword argument as they are
+       already used.
+    apply_kwargs :
+       keyword arguments passed directly to ``bz.apply.renew(**apply_kwargs)``.
+    **berry_kwargs : dict, optional
+        arguments passed directly to the `berry_curvature` method.
+
+        Here one can pass `derivative_kwargs` to pass flags to the
+        `derivative` method. In particular ``axes`` can be used
+        to speedup the calculation (by omitting certain directions).
+
+    Examples
+    --------
+    For instance, ``sigma = 'x', J_axes = 'y'`` will result in
+    :math:`J^{\sigma^x}_y=\dfrac12\{\hat{\sigma}^x, \hat{v}_y\}`, and the rest will
+    be the AHC.
+
+    >>> cond = shc(bz, J_axes="y")
+    >>> shc_y_xyz = cond[1]
+    >>> ahc_xz_xyz = cond[[0, 2]]
+
+    Passing an explicit :math:`\sigma` matrix is also allowed:
+
+    >>> cond = shc(bz)
+    >>> assert np.allclose(cond, shc(bz, sigma=Spin.Z))
+
+    For further examples, please see `ahc` which is equivalent to this
+    method.
+
+    Notes
+    -----
+    Original implementation by Armando Pezo.
+
+    See Also
+    --------
+    ~sisl.physics.derivative: method for calculating the exact derivatives
+    berry_curvature: the actual method used internally
+    spin_berry_curvature: method used to calculate the Berry-flux for calculating the spin conductivity
+    ~sisl.Lattice.volumef: volume calculation of the primary unit cell.
+    ahc: anomalous Hall conductivity, this is the equivalent method for the SHC.
+
+    Returns
+    -------
+    shc: numpy.ndarray
+        Spin Hall conductivity returned in certain dimensions ``shc[J_axes, :]``.
+        Anomalous Hall conductivity returned in the remaining dimensions ``shc[!J_axes, :]``.
+        If `sum` is False, it will be at least a 3D array with the 3rd dimension
+        having the contribution from state `i`.
+        If `k_average` is False, it will have a dimension prepended with
+        k-point resolved AHC/SHC.
+        If one passes `axes` to the `derivative_kwargs` argument one will get
+        dimensions according to the number of axes requested, by default all
+        axes will be used (even if they are non-periodic).
+        The dtype will be imaginary.
+        When :math:`D` is the dimensionality we find the unit to be
+
+        * AHC: ``shc[!J_axes, :]`` :math:`S/\mathrm{Ang}^{D-2}`.
+        * SHC: ``shc[J_axes, :]`` :math:`\hbar/e S/\mathrm{Ang}^{D-2}`.
+
+    """
+    from .hamiltonian import Hamiltonian
+
+    if isinstance(J_axes, (tuple, list)):
+        J_axes = "".join(J_axes)
+    J_axes = J_axes.lower()
+
+    H = bz.parent
+
+    # Currently we require the conductivity calculation to *only* accept Hamiltonians
+    if not isinstance(H, Hamiltonian):
+        raise SislError(
+            "shc: requires the Brillouin zone object to contain a Hamiltonian!"
+        )
+    # A spin-berry-curvature requires the objects parent
+    # to have a spin associated
+    if H.spin.is_diagonal:
+        raise ValueError(
+            f"spin_berry_curvature requires 'state' to be a non-colinear matrix."
+        )
+
+    dtype = eigenstate_kwargs.get("dtype", np.complex128)
+
+    if H.spin.is_nambu:
+        no = H.no * 2
+    else:
+        no = H.no
+    m = _create_sigma(no, sigma, dtype, eigenstate_kwargs.get("format", "csr"))
+
+    # To reduce (heavily) the computational load, we pre-setup the
+    # operators here.
+    def J(M, d):
+        nonlocal m, J_axes
+        if d in J_axes:
+            return M @ m + m @ M
+
+        return M
+
+    def noop(M, d):
+        return M
+
+    axes = berry_kwargs.get("derivative_kwargs", {}).get("axes", "xyz")
+    axes = [direction(axis) for axis in sorted(axes)]
+
+    # At this point we have the AHC (in terms of units)
+    cond = ahc(
+        bz,
+        k_average,
+        distribution=distribution,
+        eigenstate_kwargs=eigenstate_kwargs,
+        apply_kwargs=apply_kwargs,
+        **berry_kwargs,
+        operator=(J, noop),
+    )
+
+    # The SHC misses a factor -2e/hbar to correct the operator change:
+    #  j_x = -e v_x, 1/2 {s_z, v_x}
+    # The s_z = \hbar / 2 \sigma_z
+    # and v = 1/\hbar \delta_k
+    #
+    # AHC:
+    #   j_x = -e / \hbar
+    # SHC:
+    #   j_x = 1/2 { \hbar/2 \sigma_z, 1/\hbar v_x } = 1/2
+    # The 1/\hbar is contained in `berry_curvature`, and hence we
+    # are left with:
+    # AHC:
+    #   j_x = -e
+    # SHC:
+    #   j_x = 1/2 \hbar
+    # Since we never use \hbar or e, it is the same as though
+    # the units are implicit. Hence at this point, the unit is:
+    #    -\hbar / (2e) S / Ang
+    # To convert to \hbar / e S / Ang
+    # simply multiply by: -1/2
+    shc_idx = [i for i in map(direction, J_axes) if i in axes]
+    if k_average:
+        cond[shc_idx] *= -0.5
+    else:
+        cond[:, shc_idx] *= -0.5
 
     return cond
 
 
 @set_module("sisl.physics.electron")
+@deprecation("conductivity is deprecated, please use 'ahc' instead.")
+def conductivity(
+    bz,
+    distribution: DistributionType = "fermi-dirac",
+    method: Literal["ahc"] = "ahc",
+    *,
+    eigenstate_kwargs={},
+    apply_kwargs={},
+    **berry_kwargs,
+):
+    r"""Deprecated, use `ahc` instead"""
+
+    if method != "ahc":
+        raise NotImplementedError("conductivity with method != ahc is not implemented")
+    return ahc(
+        bz,
+        eigenstate_kwargs=eigenstate_kwargs,
+        apply_kwargs=apply_kwargs,
+        distribution=distribution,
+        **kwargs,
+    )
+
+
+@set_module("sisl.physics.electron")
 def berry_phase(
-    contour,
+    contour: BrillouinZone,
     sub=None,
     eigvals: bool = False,
     closed: bool = True,
-    method="berry",
+    method: Literal["berry", "zak", "berry:svd", "zak:svd"] = "berry",
     *,
-    eigenstate_kwargs=None,
     ret_overlap: bool = False,
+    eigenstate_kwargs: Optional[dict[str, Any]] = None,
+    apply_kwargs: Optional[dict[str, Any]] = None,
 ):
     r""" Calculate the Berry-phase on a loop path
 
@@ -934,7 +1138,7 @@ def berry_phase(
 
     Parameters
     ----------
-    contour : BrillouinZone
+    contour :
        containing the closed contour and has the ``contour.parent`` as an instance of Hamiltonian. The
        first and last k-point must not be the same.
     sub : None or list of int, optional
@@ -944,17 +1148,22 @@ def berry_phase(
     closed :
        whether or not to include the connection of the last and first points in the loop
        Forced true for Zak-phase calculations.
-    method : {"berry", "zak"}
+    method :
        "berry" will return the usual integral of the Berry connection over the specified contour
        "zak" will compute the Zak phase for 1D systems by performing
        a closed loop integration, see :cite:`Zak1989`.
        Additionally, one may do the Berry-phase calculation using the SVD method of the
        overlap matrices. Simply append ":svd" to the chosen method, e.g. "berry:svd".
+    ret_overlap:
+       optionally return the overlap matrix :math:`\mathbf S`
     eigenstate_kwargs : dict, optional
        keyword arguments passed directly to the ``contour.eigenstate`` method.
        One should *not* pass ``k`` as that is already used.
-    ret_overlap:
-       optionally return the overlap matrix :math:`\mathbf S`
+    eigenstate_kwargs :
+       keyword arguments passed directly to the ``contour.eigenstate`` method.
+       One should *not* pass ``k`` as that is already used.
+    apply_kwargs :
+       keyword arguments passed directly to ``contour.apply.renew(**apply_kwargs)``.
 
     Notes
     -----
@@ -986,18 +1195,13 @@ def berry_phase(
     >>> kR = 0.01
     >>> normal = [0, 0, 1]
     >>> origin = [1/3, 2/3, 0]
-    >>> bz = BrillouinZone.param_circle(H, N, kR, normal, origin)
-    >>> phase = berry_phase(bz, sub=0)
+    >>> contour = BrillouinZone.param_circle(H, N, kR, normal, origin)
+    >>> phase = berry_phase(contour, sub=0)
 
     Calculate the multi-band Berry-phase using the SVD method, thus
     ensuring removal of singular vectors.
 
-    >>> N = 30
-    >>> kR = 0.01
-    >>> normal = [0, 0, 1]
-    >>> origin = [1/3, 2/3, 0]
-    >>> bz = BrillouinZone.param_circle(H, N, kR, normal, origin)
-    >>> phase = berry_phase(bz, method="berry:svd")
+    >>> phase = berry_phase(contour, method="berry:svd")
     """
     from .hamiltonian import Hamiltonian
 
@@ -1009,6 +1213,8 @@ def berry_phase(
 
     if eigenstate_kwargs is None:
         eigenstate_kwargs = {}
+    if apply_kwargs is None:
+        apply_kwargs = {}
 
     if contour.parent.orthogonal:
 
@@ -1016,10 +1222,10 @@ def berry_phase(
             pass
 
     else:
-        gauge = eigenstate_kwargs.get("gauge", "cell")
+        gauge = eigenstate_kwargs.get("gauge", "lattice")
 
         def _lowdin(state):
-            """change state to the lowdin state, assuming everything is in R gauge
+            """change state to the lowdin state, assuming everything is in lattice gauge
             So needs to be done before changing gauge"""
             S12 = sqrth(
                 state.parent.Sk(state.info["k"], gauge=gauge, format="array"),
@@ -1042,6 +1248,7 @@ def berry_phase(
 
         def _process(prd, overlap):
             U, _, V = svd_destroy(overlap)
+            # We have to use dot, since @ does not allow scalars
             return dot(prd, U @ V)
 
     if sub is None:
@@ -1087,7 +1294,7 @@ def berry_phase(
                 prd = _process(prd, prev.inner(first, projection="matrix"))
             return prd
 
-    S = _berry(contour.apply.iter.eigenstate(**eigenstate_kwargs))
+    S = _berry(contour.apply.renew(**apply_kwargs).iter.eigenstate(**eigenstate_kwargs))
 
     # Get the angle of the berry-phase
     # When using np.angle the returned value is in ]-pi; pi]
@@ -1106,7 +1313,9 @@ def berry_phase(
 
 
 @set_module("sisl.physics.electron")
-def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
+def wavefunction(
+    v, grid, geometry=None, k=None, spinor=0, spin: Optional[Spin] = None, eta=None
+):
     r"""Add the wave-function (`Orbital.psi`) component of each orbital to the grid
 
     This routine calculates the real-space wave-function components in the
@@ -1139,7 +1348,7 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
 
     Notes
     -----
-    Currently this method only works for `v` being coefficients of the gauge="cell" method. In case
+    Currently this method only works for `v` being coefficients of the ``gauge="lattice"`` method. In case
     you are passing a `v` with the incorrect gauge you will find a phase-shift according to:
 
     .. math::
@@ -1153,7 +1362,7 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
     v : array_like
        coefficients for the orbital expansion on the real-space grid.
        If `v` is a complex array then the `grid` *must* be complex as well. The coefficients
-       must be using the ``R`` gauge.
+       must be using the *lattice* gauge.
     grid : Grid
        grid on which the wavefunction will be plotted.
        If multiple eigenstates are in this object, they will be summed.
@@ -1170,7 +1379,7 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
        eigenstate object has been created from a parent object with a `Spin` object
        contained, *and* if the spin-configuration is non-colinear or spin-orbit coupling.
        Default to the first spinor component.
-    spin : Spin, optional
+    spin :
        specification of the spin configuration of the orbital coefficients. This only has
        influence for non-colinear wavefunctions where `spinor` choice is important.
     eta : bool, optional
@@ -1217,15 +1426,21 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
 
     if spin is None:
         if len(v) // 2 == geometry.no:
-            # We can see from the input that the vector *must* be a non-colinear calculation
+            # the input corresponds to a non-collinear calculation
             v = v.reshape(-1, 2)[:, spinor]
             info(
                 "wavefunction: assumes the input wavefunction coefficients to originate from a non-colinear calculation!"
             )
+        elif len(v) // 4 == geometry.no:
+            # the input corresponds to a NAMBU calculation
+            v = v.reshape(-1, 4)[:, spinor]
+            info(
+                "wavefunction: assumes the input wavefunction coefficients to originatefrom a nambu calculation!"
+            )
 
     elif spin.kind > Spin.POLARIZED:
-        # For non-colinear cases the user selects the spinor component.
-        v = v.reshape(-1, 2)[:, spinor]
+        # For non-colinear+nambu cases the user selects the spinor component.
+        v = v.reshape(-1, spin.spinor)[:, spinor]
 
     if len(v) != geometry.no:
         raise ValueError(
@@ -1262,7 +1477,7 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
     # Convert the geometry (hosting the wavefunction coefficients) coordinates into
     # grid-fractionals X grid-shape to get index-offsets in the grid for the geometry
     # supercell.
-    geom_shape = dot(geometry.cell, ic_shape.T)
+    geom_shape = geometry.cell @ ic_shape.T
 
     # In the following we don't care about division
     # So 1) save error state, 2) turn off divide by 0, 3) calculate, 4) turn on old error state
@@ -1310,7 +1525,7 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
     rxyz[..., 2] = cphi
     # Reshape
     rxyz.shape = (-1, 3)
-    idx = dot(rxyz, ic_shape.T)
+    idx = rxyz @ ic_shape.T
     idxm = idx.min(0)
     idxM = idx.max(0)
     del ctheta_sphi, stheta_sphi, cphi, idx, rxyz, nrxyz
@@ -1329,7 +1544,7 @@ def wavefunction(v, grid, geometry=None, k=None, spinor=0, spin=None, eta=None):
         # the atoms
         # The coordinates are relative to origin, so we need to shift (when writing a grid
         # it is with respect to origin)
-        idx = dot(geometry.xyz[ia, :] - origin, ic_shape.T)
+        idx = (geometry.xyz[ia, :] - origin) @ ic_shape.T
 
         # Get min-max for all atoms
         idx_mm[ia, 0, :] = idxm * R + idx
@@ -1562,9 +1777,14 @@ class _electron_State:
         "projection",
         "argument sum has been deprecated in favor of projection",
         "0.15",
-        "0.16",
+        "0.17",
     )
-    def norm2(self, projection: Literal["sum", "orbitals", "basis", "atoms"] = "sum"):
+    def norm2(
+        self,
+        projection: Union[
+            ProjectionType, ProjectionTypeHadamard, ProjectionTypeHadamardAtoms
+        ] = "diagonal",
+    ):
         r"""Return a vector with the norm of each state :math:`\langle\psi|\mathbf S|\psi\rangle`
 
         :math:`\mathbf S` is the overlap matrix (or basis), for orthogonal basis
@@ -1586,7 +1806,14 @@ class _electron_State:
         """
         return self.inner(matrix=self.Sk(), projection=projection)
 
-    def spin_moment(self, project=False):
+    @deprecate_argument(
+        "project",
+        "projection",
+        "argument project has been deprecated in favor of projection",
+        "0.15",
+        "0.17",
+    )
+    def spin_moment(self, projection="diagonal"):
         r"""Calculate spin moment from the states
 
         This routine calls `~sisl.physics.electron.spin_moment` with appropriate arguments
@@ -1596,10 +1823,10 @@ class _electron_State:
 
         Parameters
         ----------
-        project : bool, optional
+        projection:
            whether the moments are orbitally resolved or not
         """
-        return spin_moment(self.state, self.Sk(), project=project)
+        return spin_moment(self.state, self.Sk(), projection=projection)
 
     def wavefunction(self, grid, spinor=0, eta=None):
         r"""Expand the coefficients as the wavefunction on `grid` *as-is*
@@ -1619,8 +1846,8 @@ class _electron_State:
             # at least this makes it easier to parse
             grid = Grid(grid, geometry=geometry, dtype=self.dtype)
 
-        # Ensure we are dealing with the R gauge
-        self.change_gauge("R")
+        # Ensure we are dealing with the lattice gauge
+        self.change_gauge("lattice")
 
         # Retrieve k
         k = self.info.get("k", _a.zerosd(3))
@@ -1649,53 +1876,6 @@ class StateCElectron(_electron_State, StateC):
     r"""A state describing a physical quantity related to electrons, with associated coefficients of the state"""
 
     __slots__ = []
-
-    def velocity(self, *args, **kwargs):
-        r"""Calculate velocity for the states
-
-        This routine calls ``derivative(1, *args, **kwargs)`` and returns the velocity for the states.
-
-        Note that the coefficients associated with the `StateCElectron` *must* correspond
-        to the energies of the states.
-
-        Notes
-        -----
-        The states and energies for the states *may* have changed after calling this routine.
-        This is because of the velocity un-folding for degenerate modes. I.e. calling
-        `PDOS` after this method *may* change the result.
-
-        The velocities are calculated without the Berry curvature contribution see Eq. (2) in :cite:`Wang2006`.
-        The missing contribution may be added in later editions, for completeness sake, it is:
-
-        .. math::
-           \delta \mathbf v = - \mathbf k\times \Omega_i(\mathbf k)
-
-        where :math:`\Omega_i` is the Berry curvature for state :math:`i`.
-
-        See Also
-        --------
-        derivative : for details of the implementation
-        """
-        v = self.derivative(1, *args, **kwargs)
-        v *= _velocity_const
-        return v
-
-    def berry_curvature(self, *args, **kwargs):
-        r"""Calculate Berry curvature for the states
-
-        This routine calls ``derivative(1, *args, **kwargs, matrix=True)`` and
-        returns the Berry curvature for the states.
-
-        Note that the coefficients associated with the `StateCElectron` *must* correspond
-        to the energies of the states.
-
-        See Also
-        --------
-        derivative : for details of the velocity matrix calculation implementation
-        sisl.physics.electron.berry_curvature : for details of the Berry curvature implementation
-        """
-        v = self.derivative(1, *args, **kwargs, matrix=True)
-        return _berry_curvature(v, self.c)
 
     def effective_mass(self, *args, **kwargs):
         r"""Calculate effective mass tensor for the states, units are (ps/Ang)^2
@@ -1744,12 +1924,12 @@ class EigenvalueElectron(CoefficientElectron):
         """Eigenvalues"""
         return self.c
 
-    def occupation(self, distribution="fermi_dirac"):
+    def occupation(self, distribution: DistributionType = "fermi_dirac"):
         r"""Calculate the occupations for the states according to a distribution function
 
         Parameters
         ----------
-        distribution : str or func, optional
+        distribution :
            distribution used to find occupations
 
         Returns
@@ -1761,7 +1941,7 @@ class EigenvalueElectron(CoefficientElectron):
             distribution = get_distribution(distribution)
         return distribution(self.eig)
 
-    def DOS(self, E, distribution="gaussian"):
+    def DOS(self, E, distribution: DistributionType = "gaussian"):
         r"""Calculate DOS for provided energies, `E`.
 
         This routine calls `sisl.physics.electron.DOS` with appropriate arguments
@@ -1797,12 +1977,12 @@ class EigenstateElectron(StateCElectron):
         r"""Eigenvalues for each state"""
         return self.c
 
-    def occupation(self, distribution="fermi_dirac"):
+    def occupation(self, distribution: DistributionType = "fermi_dirac"):
         r"""Calculate the occupations for the states according to a distribution function
 
         Parameters
         ----------
-        distribution : str or func, optional
+        distribution :
            distribution used to find occupations
 
         Returns
@@ -1814,7 +1994,7 @@ class EigenstateElectron(StateCElectron):
             distribution = get_distribution(distribution)
         return distribution(self.eig)
 
-    def DOS(self, E, distribution="gaussian"):
+    def DOS(self, E, distribution: DistributionType = "gaussian"):
         r"""Calculate DOS for provided energies, `E`.
 
         This routine calls `sisl.physics.electron.DOS` with appropriate arguments
@@ -1824,7 +2004,7 @@ class EigenstateElectron(StateCElectron):
         """
         return DOS(E, self.c, distribution)
 
-    def PDOS(self, E, distribution="gaussian"):
+    def PDOS(self, E, distribution: DistributionType = "gaussian"):
         r"""Calculate PDOS for provided energies, `E`.
 
         This routine calls `~sisl.physics.electron.PDOS` with appropriate arguments

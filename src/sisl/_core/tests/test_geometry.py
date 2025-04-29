@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 import itertools
-import math as m
-import os.path as osp
 
 import numpy as np
 import pytest
 
+import sisl as si
 import sisl.geom as sisl_geom
 from sisl import (
     Atom,
@@ -21,8 +20,6 @@ from sisl import (
     SislWarning,
     Sphere,
 )
-
-_dir = osp.join("sisl")
 
 pytestmark = [pytest.mark.geom, pytest.mark.geometry]
 
@@ -409,14 +406,6 @@ class TestGeometry:
         lattice.set_nsc([0, 1, 0])
         assert np.allclose([1, 1, 1], lattice.nsc)
         assert len(lattice.sc_off) == np.prod(lattice.nsc)
-
-    def test_rotate_deprecate(self, setup):
-        rot1 = setup.g.rotate(180, "xz", what="xyz")
-        with pytest.warns(SislDeprecation) as warns:
-            rot2 = setup.g.rotate(180, [1, 0, 1], only="xyz")
-        assert len(warns) == 1
-        assert np.allclose(rot1.cell, rot2.cell)
-        assert np.allclose(rot1.xyz, rot2.xyz)
 
     def test_rotation1(self, setup):
         rot = setup.g.rotate(180, [0, 0, 1], what="xyz+abc")
@@ -986,6 +975,22 @@ class TestGeometry:
         lattice_3x3 = g.lattice.tile(3, 0).tile(3, 1)
         assert len(g.within_inf(lattice_3x3)[0]) == 25
 
+    def test_within_inf_gh649(self):
+        # see https://github.com/zerothi/sisl/issues/649
+
+        # Create a geometry with an atom outside of the unit cell
+        geometry = Geometry([-0.5, 0, 0], lattice=np.diag([2, 10, 10]))
+
+        search = Lattice(np.diag([3, 10, 10]))
+        ia, xyz, isc = geometry.within_inf(search, periodic=True)
+        assert np.allclose(ia, 0)
+        assert np.allclose(isc, [1, 0, 0])
+
+        search = Lattice(np.diag([2, 10, 10]))
+        ia, xyz, isc = geometry.within_inf(search, periodic=True)
+        assert np.allclose(ia, 0)
+        assert np.allclose(isc, [1, 0, 0])
+
     def test_close_sizes(self, setup):
         point = 0
 
@@ -1295,37 +1300,37 @@ class TestGeometry:
         d = geom.distance(0, method="mode")
         assert len(d) == 1
 
-    def test_optimize_nsc1(self, setup):
+    def test_find_nsc1(self, setup):
         # Create a 1D chain
         geom = Geometry([0] * 3, Atom(1, R=1.0), lattice=1)
         geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc(), [3, 3, 3])
-        geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc(1), [77, 3, 77])
-        geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc([0, 2]), [3, 77, 3])
-        geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc([0, 2], R=2.00000001), [5, 77, 5])
-        geom.set_nsc([1, 1, 1])
-        assert np.allclose(geom.optimize_nsc([0, 2], R=2.0000001), [5, 1, 5])
-        geom.set_nsc([5, 1, 5])
-        assert np.allclose(geom.optimize_nsc([0, 2], R=0.9999), [1, 1, 1])
 
-    def test_optimize_nsc2(self, setup):
+        assert np.allclose(geom.find_nsc(), [3, 3, 3])
+        assert np.allclose(geom.find_nsc(1), [77, 3, 77])
+        assert np.allclose(geom.find_nsc([0, 2]), [3, 77, 3])
+        assert np.allclose(geom.find_nsc([0, 2], R=2.00000001), [5, 77, 5])
+
+        geom.set_nsc([1, 1, 1])
+        assert np.allclose(geom.find_nsc([0, 2], R=2.00000001), [5, 1, 5])
+
+        geom.set_nsc([5, 1, 5])
+        assert np.allclose(geom.find_nsc([0, 2], R=0.9999), [1, 1, 1])
+
+    def test_find_nsc2(self, setup):
         # 2 ** 0.5 ensures lattice vectors with length 1
         geom = sisl_geom.fcc(2**0.5, Atom(1, R=1.0001))
         geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc(), [3, 3, 3])
-        geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc(1), [77, 3, 77])
-        geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc([0, 2]), [3, 77, 3])
-        geom.set_nsc([77, 77, 77])
-        assert np.allclose(geom.optimize_nsc([0, 2], R=2.000001), [5, 77, 5])
+
+        assert np.allclose(geom.find_nsc(), [3, 3, 3])
+        assert np.allclose(geom.find_nsc(1), [77, 3, 77])
+        assert np.allclose(geom.find_nsc([0, 2]), [3, 77, 3])
+        assert np.allclose(geom.find_nsc([0, 2], R=2.00000001), [5, 77, 5])
+
         geom.set_nsc([1, 1, 1])
-        assert np.allclose(geom.optimize_nsc([0, 2], R=2.0000001), [5, 1, 5])
+        assert np.allclose(geom.find_nsc([0, 2], R=2.00000001), [5, 1, 5])
+
         geom.set_nsc([5, 1, 5])
-        assert np.allclose(geom.optimize_nsc([0, 2], R=0.9999), [1, 1, 1])
+        assert np.allclose(geom.find_nsc([0, 2], R=0.9999), [1, 1, 1])
 
     def test_argumentparser1(self, setup):
         setup.g.ArgumentParser()
@@ -1549,12 +1554,32 @@ class TestGeometry:
 
     # Test ASE (but only fail if present)
 
+    def test_geometry_dispatch(self):
+        pytest.importorskip("ase", reason="ase not available")
+        gr = sisl_geom.graphene()
+        to_ase = gr.to.ase()
+
+        ase_rotate = si.rotate(to_ase, 30, [0, 0, 1])
+        assert isinstance(ase_rotate, type(to_ase))
+        ase_sisl_rotate = si.rotate(to_ase, 30, [0, 0, 1], ret_sisl=True)
+        assert isinstance(ase_sisl_rotate, Geometry)
+        geom_rotate = si.rotate(gr, 30, [0, 0, 1])
+
+        assert geom_rotate.equal(ase_sisl_rotate, R=False)
+
     def test_geometry_ase_new_to(self):
         pytest.importorskip("ase", reason="ase not available")
         gr = sisl_geom.graphene()
         to_ase = gr.to.ase()
         from_ase = gr.new(to_ase)
         assert gr.equal(from_ase, R=False)
+
+    def test_geometry_ase_run_center(self):
+        pytest.importorskip("ase", reason="ase not available")
+        gr = sisl_geom.graphene()
+        ase_atoms = gr.to.ase()
+        from_ase = si.center(ase_atoms)
+        assert np.allclose(gr.center(), from_ase)
 
     @pytest.mark.xfail(
         reason="pymatgen backconversion sets nsc=[3, 3, 3], we need to figure this out"
@@ -1596,18 +1621,18 @@ def test_geometry_sort_simple():
     atol = 1e-9
 
     for i in [0, 1, 2]:
-        s = bi.sort(axis=i)
+        s = bi.sort(axes=i)
         assert np.all(np.diff(s.xyz[:, i]) >= -atol)
         s = bi.sort(lattice=i)
         assert np.all(np.diff(s.fxyz[:, i] * bi.lattice.length[i]) >= -atol)
 
-    s, idx = bi.sort(axis=0, lattice=1, ret_atoms=True)
+    s, idx = bi.sort(axes=0, lattice=1, ret_atoms=True)
     assert np.all(np.diff(s.xyz[:, 0]) >= -atol)
     for ix in idx:
         assert np.all(np.diff(bi.fxyz[ix, 1]) >= -atol)
 
     s, idx = bi.sort(
-        axis=0, ascending=False, lattice=1, vector=[0, 0, 1], ret_atoms=True
+        axes=0, ascending=False, lattice=1, vector=[0, 0, 1], ret_atoms=True
     )
     assert np.all(np.diff(s.xyz[:, 0]) >= -atol)
     for ix in idx:
@@ -1623,23 +1648,28 @@ def test_geometry_sort_int():
     atol = 1e-9
 
     for i in [0, 1, 2]:
-        s = bi.sort(axis0=i)
+        s = bi.sort(axes0=i)
         assert np.all(np.diff(s.xyz[:, i]) >= -atol)
         s = bi.sort(lattice3=i)
         assert np.all(np.diff(s.fxyz[:, i] * bi.lattice.length[i]) >= -atol)
 
-    s, idx = bi.sort(axis12314=0, lattice0=1, ret_atoms=True)
+    s, idx = bi.sort(axes12314=0, lattice0=1, ret_atoms=True)
     assert np.all(np.diff(s.xyz[:, 0]) >= -atol)
     for ix in idx:
         assert np.all(np.diff(bi.fxyz[ix, 1]) >= -atol)
 
     s, idx = bi.sort(
-        ascending1=True, axis15=0, ascending0=False, lattice235=1, ret_atoms=True
+        ascending1=True, axes15=0, ascending0=False, lattice235=1, ret_atoms=True
     )
     assert np.all(np.diff(s.xyz[:, 0]) >= -atol)
     for ix in idx:
         # idx is according to bi
         assert np.all(np.diff(bi.fxyz[ix, 1] * bi.lattice.length[i]) <= atol)
+
+
+def test_geometry_ellipsis():
+    gr = sisl_geom.graphene()
+    assert np.allclose(gr.axyz(...), gr.axyz(None))
 
 
 def test_geometry_sort_atom():
@@ -1832,7 +1862,7 @@ def test_geometry_sub_orbitals():
 
 def test_geometry_new_xyz(sisl_tmp):
     # test that Geometry.new works
-    out = sisl_tmp("out.xyz", _dir)
+    out = sisl_tmp("out.xyz")
     C = Atom[6]
     gr = sisl_geom.graphene(atoms=C)
     # writing doesn't save orbital information, so we force

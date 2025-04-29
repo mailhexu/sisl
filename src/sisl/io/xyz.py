@@ -13,7 +13,7 @@ import numpy as np
 import sisl._array as _a
 from sisl import Atoms, BoundaryCondition, Geometry, Lattice
 from sisl._internal import set_module
-from sisl.messages import deprecate_argument, warn
+from sisl.messages import deprecate_argument
 
 # Import sile objects
 from ._help import header_to_dict
@@ -154,7 +154,7 @@ class xyzSile(Sile):
 
     @SileBinder(skip_func=_r_geometry_skip)
     @sile_fh_open()
-    @deprecate_argument("sc", "lattice", "use lattice= instead of sc=", "0.15", "0.16")
+    @deprecate_argument("sc", "lattice", "use lattice= instead of sc=", "0.15", "0.17")
     def read_geometry(self, atoms=None, lattice: Optional[Lattice] = None) -> Geometry:
         """Returns Geometry object from the XYZ file
 
