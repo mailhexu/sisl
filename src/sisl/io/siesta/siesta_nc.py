@@ -274,7 +274,8 @@ class ncSileSiesta(SileCDFSiesta):
             H._csr._D[:, i] = sp.variables["H_so_offsite"][i, :] * Ry2eV
 
         # fix siesta specific notation
-        _mat_spin_convert(H)
+        #_mat_spin_convert(H)
+        _mat_siesta2sisl(H)
         return H.transpose(spin=False, sort=kwargs.get("sort", True))
 
     def read_dynamical_matrix(self, **kwargs) -> DynamicalMatrix:
