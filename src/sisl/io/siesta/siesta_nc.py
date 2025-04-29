@@ -251,7 +251,7 @@ class ncSileSiesta(SileCDFSiesta):
             H._csr._D[:, i] = sp.variables["H"][i, :] * Ry2eV
 
         # fix siesta specific notation
-        _mat_siesta2sisl(H)
+        _mat_siesta2sisl(H)        
         H = H.astype(dtype=kwargs.get("dtype"), copy=False)
 
         # Shift to the Fermi-level
